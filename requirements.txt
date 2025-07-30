@@ -2,6 +2,7 @@ streamlit
 google-generativeai
 langchain
 langchain-community
-chromadb
+pinecone-client
 pypdf
 sentence-transformers
+torch
