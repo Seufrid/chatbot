@@ -3,7 +3,7 @@ google-generativeai
 langchain
 langchain-community
 langchain-pinecone
-pinecone-client>=3.0.0
+pinecone
 pypdf
 sentence-transformers
 torch
