@@ -2,7 +2,8 @@ streamlit
 google-generativeai
 langchain
 langchain-community
-pinecone-client
+langchain-pinecone
+pinecone-client>=3.0.0
 pypdf
 sentence-transformers
 torch
