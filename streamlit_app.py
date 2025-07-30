@@ -2,16 +2,11 @@ import streamlit as st
 import google.generativeai as genai
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import Chroma
-from langchain.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import Pinecone
+import pinecone
 import os
 import tempfile
-
-# At the top of your file, after imports
-if "GOOGLE_API_KEY" in st.secrets:
-    default_api_key = st.secrets["GOOGLE_API_KEY"]
-else:
-    default_api_key = ""
 
 # Configure page
 st.set_page_config(
@@ -24,24 +19,47 @@ st.set_page_config(
 st.title("💼 Finance Policy Assistant")
 st.markdown("Ask me anything about company finance policies in English or Bahasa Malaysia!")
 
+# Initialize Pinecone
+@st.cache_resource
+def init_pinecone():
+    """Initialize Pinecone connection"""
+    # Get Pinecone credentials from Streamlit secrets or sidebar
+    if "PINECONE_API_KEY" in st.secrets and "PINECONE_ENV" in st.secrets:
+        pc_api_key = st.secrets["PINECONE_API_KEY"]
+        pc_env = st.secrets["PINECONE_ENV"]
+        return pc_api_key, pc_env
+    return None, None
+
 # Sidebar for setup
 with st.sidebar:
     st.header("Setup")
     
-    # API Key input
-    api_key = st.text_input("Enter Google Gemini API Key", type="password", value=default_api_key)
+    # API Key inputs
+    api_key = st.text_input("Enter Google Gemini API Key", type="password",
+                           value=st.secrets.get("GOOGLE_API_KEY", ""))
+    
+    # Pinecone setup (only show if not in secrets)
+    pc_api_key, pc_env = init_pinecone()
+    
+    if not pc_api_key:
+        st.subheader("Pinecone Setup")
+        pc_api_key = st.text_input("Pinecone API Key", type="password")
+        pc_env = st.text_input("Pinecone Environment", placeholder="e.g., us-east-1-aws")
     
     if api_key:
         genai.configure(api_key=api_key)
     
-    # PDF upload for initial setup (one-time)
-    st.subheader("Initial Setup")
-    uploaded_file = st.file_uploader("Upload Policy PDF (one-time setup)", type="pdf")
+    # PDF upload for initial setup
+    st.subheader("Upload Policy Document")
+    uploaded_file = st.file_uploader("Upload Policy PDF", type="pdf")
     
-    if st.button("Process PDF") and uploaded_file and api_key:
+    if st.button("Process PDF") and uploaded_file and api_key and pc_api_key and pc_env:
         with st.spinner("Processing PDF... This may take a few minutes."):
-
             try:
+                # Initialize Pinecone
+                pc = pinecone.Pinecone(api_key=pc_api_key)
+                index = pc.Index("finance-policy")
+                
                 # Save uploaded file temporarily
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
                     tmp_file.write(uploaded_file.read())
@@ -59,34 +77,46 @@ with st.sidebar:
                 )
                 chunks = text_splitter.split_documents(documents)
                 
-                # Create embeddings (using free HuggingFace embeddings)
+                # Create embeddings
                 embeddings = HuggingFaceEmbeddings(
                     model_name="sentence-transformers/all-MiniLM-L6-v2"
                 )
                 
-                # Create vector store
-                vectorstore = Chroma.from_documents(
+                # Create vector store in Pinecone
+                vectorstore = Pinecone.from_documents(
                     documents=chunks,
                     embedding=embeddings,
-                    persist_directory="./chroma_db"
+                    index_name="finance-policy"
                 )
-                vectorstore.persist()
                 
                 # Clean up temp file
                 os.unlink(tmp_file_path)
                 
-                st.success("✅ PDF processed successfully! You can now ask questions.")
+                st.success(f"✅ PDF processed successfully! {len(chunks)} chunks created.")
                 st.session_state.pdf_processed = True
                 
             except Exception as e:
                 st.error(f"Error processing PDF: {str(e)}")
 
+    # Check index status
+    if pc_api_key and pc_env:
+        try:
+            pc = pinecone.Pinecone(api_key=pc_api_key)
+            index = pc.Index("finance-policy")
+            stats = index.describe_index_stats()
+            if stats['total_vector_count'] > 0:
+                st.success(f"✅ Vector database ready: {stats['total_vector_count']} vectors")
+            else:
+                st.warning("⚠️ No vectors in database. Please upload a PDF.")
+        except:
+            st.error("❌ Could not connect to Pinecone")
+
 # Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Increase the context window size by keeping track of more messages
-MAX_HISTORY = 10  # You can adjust this number to your needs
+# Keep track of more messages for context
+MAX_HISTORY = 10
 if len(st.session_state.messages) > MAX_HISTORY:
     st.session_state.messages = st.session_state.messages[-MAX_HISTORY:]
 
@@ -95,40 +125,58 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Function to get relevant context from vector store
+# Function to get relevant context from Pinecone
 def get_relevant_context(query, k=3):
     try:
-        # Load existing vector store
-        embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
-        vectorstore = Chroma(
-            persist_directory="./chroma_db",
-            embedding_function=embeddings
-        )
+        pc_api_key, pc_env = init_pinecone()
+        if not pc_api_key:
+            # Try to get from sidebar inputs
+            pc_api_key = st.session_state.get('pc_api_key')
+            pc_env = st.session_state.get('pc_env')
         
-        # Search for relevant documents
-        docs = vectorstore.similarity_search(query, k=k)
-        context = "\n\n".join([doc.page_content for doc in docs])
-        
-        # Include recent chat messages for better context
-        chat_context = "\n".join([message["content"] for message in st.session_state.messages])
-        
-        # Combine document context and chat context
-        full_context = context + "\n\n" + chat_context
-        return full_context
-    except:
+        if pc_api_key and pc_env:
+            # Initialize Pinecone
+            pc = pinecone.Pinecone(api_key=pc_api_key)
+            
+            # Initialize embeddings
+            embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
+            )
+            
+            # Load existing vector store
+            vectorstore = Pinecone.from_existing_index(
+                index_name="finance-policy",
+                embedding=embeddings
+            )
+            
+            # Search for relevant documents
+            docs = vectorstore.similarity_search(query, k=k)
+            context = "\n\n".join([doc.page_content for doc in docs])
+            
+            return context
+        return ""
+    except Exception as e:
+        st.error(f"Error retrieving context: {str(e)}")
         return ""
 
 # Function to generate response using Gemini
 def generate_response(query, context):
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-pro')
+        
+        # Include chat history for better context
+        chat_history = "\n".join([
+            f"{msg['role'].upper()}: {msg['content']}" 
+            for msg in st.session_state.messages[-4:]  # Last 4 messages
+        ])
         
         prompt = f"""You are a helpful assistant for finance department employees. Answer questions about company finance policies based on the provided context. You can respond in both English and Bahasa Malaysia based on the user's preference.
 
 Context from company policies:
 {context}
+
+Recent conversation:
+{chat_history}
 
 User Question: {query}
 
@@ -138,6 +186,7 @@ Instructions:
 - Be concise but helpful
 - Respond in the same language as the question when possible
 - If asked in Bahasa Malaysia, respond in Bahasa Malaysia
+- Consider the conversation history for context
 
 Answer:"""
 
@@ -148,14 +197,13 @@ Answer:"""
 
 # Chat input
 if prompt := st.chat_input("Ask about finance policies... (Tanya tentang polisi kewangan...)"):
-    # Check if API key is provided
+    # Check if API keys are provided
     if not api_key:
         st.error("Please enter your Google Gemini API key in the sidebar first.")
         st.stop()
     
-    # Check if PDF has been processed
-    if not os.path.exists("./chroma_db"):
-        st.error("Please upload and process the policy PDF first using the sidebar.")
+    if not pc_api_key or not pc_env:
+        st.error("Please enter your Pinecone credentials in the sidebar.")
         st.stop()
     
     # Add user message to chat history
@@ -169,8 +217,11 @@ if prompt := st.chat_input("Ask about finance policies... (Tanya tentang polisi 
             # Get relevant context
             context = get_relevant_context(prompt)
             
-            # Generate response
-            response = generate_response(prompt, context)
+            if not context:
+                response = "I couldn't find any relevant information in the policy documents. Please make sure you've uploaded the policy PDF first."
+            else:
+                # Generate response
+                response = generate_response(prompt, context)
             
             st.markdown(response)
     
