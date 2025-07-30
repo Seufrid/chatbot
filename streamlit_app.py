@@ -289,7 +289,7 @@ def get_relevant_context(query, k=5):  # Increased k for better context
 # Function to generate response using Gemini
 def generate_response(query, context):
     try:
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         # Include chat history for better context
         chat_history = "\n".join([
