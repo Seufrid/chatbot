@@ -36,7 +36,7 @@ st.markdown("Ask me anything about company finance policies in English or Bahasa
 # Initialize API keys from secrets
 GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY", "")
 PINECONE_API_KEY = st.secrets.get("PINECONE_API_KEY", "")
-ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "admin123")  # Change this!
+ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "admin123")
 
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
@@ -50,7 +50,9 @@ def init_pinecone():
             
             # Create index if it doesn't exist
             index_name = "finance-policy"
-            if index_name not in pc.list_indexes().names():
+            existing_indexes = [index.name for index in pc.list_indexes()]
+            
+            if index_name not in existing_indexes:
                 pc.create_index(
                     name=index_name,
                     dimension=384,  # for all-MiniLM-L6-v2
@@ -74,7 +76,6 @@ if is_admin():
         # Logout button
         if st.button("Logout", type="secondary"):
             st.session_state.admin_authenticated = False
-            st.query_params.clear()
             st.rerun()
         
         # Show API key status
@@ -95,10 +96,10 @@ if is_admin():
                     st.metric("Dimensions", stats['dimension'])
                 
                 # Show namespaces (different PDFs)
-                if stats['namespaces']:
+                if stats.get('namespaces'):
                     st.subheader("Uploaded Documents")
                     for ns, ns_stats in stats['namespaces'].items():
-                        if ns:  # Skip empty namespace
+                        if ns:
                             st.text(f"📄 {ns}: {ns_stats['vector_count']} chunks")
                 
             except Exception as e:
@@ -109,11 +110,11 @@ if is_admin():
         uploaded_file = st.file_uploader(
             "Choose PDF file", 
             type="pdf",
-            help="Upload finance policy documents. Each PDF will be processed and added to the knowledge base."
+            help="Upload finance policy documents."
         )
         
         if st.button("Process PDF", type="primary") and uploaded_file:
-            with st.spinner(f"Processing {uploaded_file.name}... This may take a few minutes."):
+            with st.spinner(f"Processing {uploaded_file.name}..."):
                 try:
                     # Save uploaded file temporarily
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
@@ -124,7 +125,7 @@ if is_admin():
                     loader = PyPDFLoader(tmp_file_path)
                     documents = loader.load()
                     
-                    # Add metadata to each document
+                    # Add metadata
                     for i, doc in enumerate(documents):
                         doc.metadata.update({
                             'source_file': uploaded_file.name,
@@ -133,23 +134,20 @@ if is_admin():
                             'total_pages': len(documents)
                         })
                     
-                    # Split documents into chunks
+                    # Split documents
                     text_splitter = RecursiveCharacterTextSplitter(
                         chunk_size=1000,
                         chunk_overlap=200,
-                        length_function=len,
-                        separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
+                        length_function=len
                     )
                     chunks = text_splitter.split_documents(documents)
                     
                     # Create embeddings
                     embeddings = HuggingFaceEmbeddings(
-                        model_name="sentence-transformers/all-MiniLM-L6-v2",
-                        model_kwargs={'device': 'cpu'},
-                        encode_kwargs={'normalize_embeddings': True}
+                        model_name="sentence-transformers/all-MiniLM-L6-v2"
                     )
                     
-                    # Add to vector store (using filename as namespace for organization)
+                    # Add to vector store
                     namespace = uploaded_file.name.replace('.pdf', '').replace(' ', '_')
                     vectorstore = PineconeVectorStore.from_documents(
                         documents=chunks,
@@ -158,7 +156,7 @@ if is_admin():
                         namespace=namespace
                     )
                     
-                    # Clean up temp file
+                    # Clean up
                     os.unlink(tmp_file_path)
                     
                     st.success(f"✅ Successfully processed {uploaded_file.name}")
@@ -169,35 +167,6 @@ if is_admin():
                     st.error(f"Error processing PDF: {str(e)}")
                     if 'tmp_file_path' in locals():
                         os.unlink(tmp_file_path)
-        
-        # Danger zone
-        with st.expander("⚠️ Danger Zone"):
-            st.warning("These actions cannot be undone!")
-            
-            # Delete specific document
-            if stats.get('namespaces'):
-                doc_to_delete = st.selectbox(
-                    "Select document to delete",
-                    [ns for ns in stats['namespaces'].keys() if ns]
-                )
-                if st.button("Delete Selected Document", type="secondary"):
-                    if st.checkbox("I understand this will delete this document"):
-                        try:
-                            index.delete(namespace=doc_to_delete, delete_all=True)
-                            st.success(f"Deleted {doc_to_delete}")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error deleting: {str(e)}")
-            
-            # Clear all vectors
-            if st.button("Clear ALL Vectors", type="secondary"):
-                if st.checkbox("I understand this will delete ALL data"):
-                    try:
-                        index.delete(delete_all=True)
-                        st.success("All vectors cleared!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error clearing vectors: {str(e)}")
 
 # Regular User Sidebar
 else:
@@ -209,11 +178,9 @@ else:
         **How to use:**
         - Type your question in any language
         - Get instant answers from policy documents
-        
-        **Contact:** IT Support for issues
         """)
         
-        # Show system status for users
+        # Show system status
         pc = init_pinecone()
         if pc:
             try:
@@ -240,44 +207,32 @@ else:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Keep track of conversation context
-MAX_HISTORY = 10
-if len(st.session_state.messages) > MAX_HISTORY * 2:  # Keep more history
-    st.session_state.messages = st.session_state.messages[-MAX_HISTORY:]
-
 # Display chat messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Function to get relevant context from Pinecone
-@st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_relevant_context(query, k=5):  # Increased k for better context
+# Function to get relevant context
+def get_relevant_context(query, k=5):
     try:
         if PINECONE_API_KEY:
-            # Initialize embeddings
             embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2",
-                model_kwargs={'device': 'cpu'},
-                encode_kwargs={'normalize_embeddings': True}
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
             )
             
-            # Load existing vector store
             vectorstore = PineconeVectorStore(
                 index_name="finance-policy",
                 embedding=embeddings
             )
             
-            # Search across all namespaces
             docs = vectorstore.similarity_search_with_score(query, k=k)
             
-            # Format context with metadata
             context_parts = []
             for doc, score in docs:
                 source = doc.metadata.get('source_file', 'Unknown')
                 page = doc.metadata.get('page', 'Unknown')
                 context_parts.append(
-                    f"[Source: {source}, Page: {page}, Relevance: {score:.2f}]\n{doc.page_content}\n"
+                    f"[Source: {source}, Page: {page}]\n{doc.page_content}\n"
                 )
             
             return "\n---\n".join(context_parts)
@@ -286,18 +241,17 @@ def get_relevant_context(query, k=5):  # Increased k for better context
         st.error(f"Error retrieving context: {str(e)}")
         return ""
 
-# Function to generate response using Gemini
+# Function to generate response
 def generate_response(query, context):
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-pro')
         
-        # Include chat history for better context
         chat_history = "\n".join([
             f"{msg['role'].upper()}: {msg['content']}" 
-            for msg in st.session_state.messages[-6:]  # Last 6 messages
+            for msg in st.session_state.messages[-6:]
         ])
         
-        prompt = f"""You are a helpful assistant for finance department employees. Answer questions about company finance policies based on the provided context. You can respond in both English and Bahasa Malaysia based on the user's preference.
+        prompt = f"""You are a helpful assistant for finance department employees. Answer questions about company finance policies based on the provided context.
 
 Context from company policies:
 {context}
@@ -311,42 +265,30 @@ Instructions:
 - Answer based ONLY on the provided context
 - If the answer isn't in the context, say "I couldn't find specific information about that in the policy documents"
 - Be concise but thorough
-- Include relevant policy references when available
 - Respond in the same language as the question
-- If asked in Bahasa Malaysia, respond in Bahasa Malaysia
-- Consider the conversation history for context continuity
-- If multiple sources provide information, synthesize them coherently
 
 Answer:"""
 
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.7,
-                max_output_tokens=1000,
-            )
-        )
+        response = model.generate_content(prompt)
         return response.text
     except Exception as e:
         return f"Sorry, I encountered an error: {str(e)}"
 
-# Check if system is properly configured
+# Check system configuration
 if not GOOGLE_API_KEY or not PINECONE_API_KEY:
     st.error("⚠️ System not properly configured. Please contact IT support.")
-    st.info("Admin: Add API keys to Streamlit secrets")
     st.stop()
 
 # Chat input
-if prompt := st.chat_input("Ask about finance policies... (Tanya tentang polisi kewangan...)"):
-    # Add user message to chat history
+if prompt := st.chat_input("Ask about finance policies..."):
+    # Add user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
     
-    # Generate assistant response
+    # Generate response
     with st.chat_message("assistant"):
         with st.spinner("Searching policy documents..."):
-            # Get relevant context
             context = get_relevant_context(prompt)
             
             if not context:
@@ -355,25 +297,16 @@ if prompt := st.chat_input("Ask about finance policies... (Tanya tentang polisi 
 This could mean:
 - No policy documents have been uploaded yet
 - Your question doesn't match any content in the uploaded policies
-- The system is having connection issues
 
-Please try rephrasing your question or contact IT support if the problem persists."""
+Please try rephrasing your question or contact IT support."""
             else:
-                # Generate response
                 response = generate_response(prompt, context)
             
             st.markdown(response)
     
-    # Add assistant response to chat history
+    # Add assistant response
     st.session_state.messages.append({"role": "assistant", "content": response})
 
 # Footer
 st.markdown("---")
-col1, col2, col3 = st.columns([2, 1, 1])
-with col1:
-    st.markdown("*Finance Policy Assistant - Powered by AI*")
-with col2:
-    st.markdown(f"*{datetime.now().strftime('%Y-%m-%d')}*")
-with col3:
-    if is_admin():
-        st.markdown("*🔐 Admin Mode*")
+st.markdown("*Finance Policy Assistant - Powered by AI*")
