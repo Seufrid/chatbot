@@ -18,15 +18,11 @@ st.set_page_config(
 
 # Check if admin mode
 def is_admin():
-    # Method 1: URL parameter (?admin=true)
     query_params = st.query_params
     if query_params.get("admin") == "true":
         return True
-    
-    # Method 2: Check if admin authenticated in session
     if st.session_state.get("admin_authenticated"):
         return True
-    
     return False
 
 # Title and description
@@ -95,12 +91,18 @@ if is_admin():
                 with col2:
                     st.metric("Dimensions", stats['dimension'])
                 
+                # Debug info
+                st.write("**Debug Info:**")
+                st.write(f"Index stats: {stats}")
+                
                 # Show namespaces (different PDFs)
                 if stats.get('namespaces'):
                     st.subheader("Uploaded Documents")
                     for ns, ns_stats in stats['namespaces'].items():
                         if ns:
                             st.text(f"📄 {ns}: {ns_stats['vector_count']} chunks")
+                        else:
+                            st.text(f"📄 Default namespace: {ns_stats['vector_count']} chunks")
                 
             except Exception as e:
                 st.error(f"Error fetching stats: {str(e)}")
@@ -125,6 +127,8 @@ if is_admin():
                     loader = PyPDFLoader(tmp_file_path)
                     documents = loader.load()
                     
+                    st.write(f"Loaded {len(documents)} pages from PDF")
+                    
                     # Add metadata
                     for i, doc in enumerate(documents):
                         doc.metadata.update({
@@ -142,18 +146,19 @@ if is_admin():
                     )
                     chunks = text_splitter.split_documents(documents)
                     
+                    st.write(f"Split into {len(chunks)} chunks")
+                    
                     # Create embeddings
                     embeddings = HuggingFaceEmbeddings(
                         model_name="sentence-transformers/all-MiniLM-L6-v2"
                     )
                     
-                    # Add to vector store
-                    namespace = uploaded_file.name.replace('.pdf', '').replace(' ', '_')
+                    # Add to vector store WITHOUT namespace (simpler approach)
                     vectorstore = PineconeVectorStore.from_documents(
                         documents=chunks,
                         embedding=embeddings,
-                        index_name="finance-policy",
-                        namespace=namespace
+                        index_name="finance-policy"
+                        # Removed namespace to avoid complications
                     )
                     
                     # Clean up
@@ -180,18 +185,30 @@ else:
         - Get instant answers from policy documents
         """)
         
-        # Show system status
+        # Show system status with more details
         pc = init_pinecone()
         if pc:
             try:
                 index = pc.Index("finance-policy")
                 stats = index.describe_index_stats()
+                
                 if stats['total_vector_count'] > 0:
-                    st.success(f"✅ System ready with {len(stats.get('namespaces', {}))} policy documents")
+                    st.success(f"✅ System ready")
+                    st.info(f"📊 {stats['total_vector_count']} document chunks available")
+                    
+                    # Show which documents are available
+                    if stats.get('namespaces'):
+                        st.write("**Available documents:**")
+                        for ns, ns_stats in stats['namespaces'].items():
+                            if ns:
+                                st.text(f"• {ns}")
+                            else:
+                                st.text(f"• Policy documents ({ns_stats['vector_count']} chunks)")
                 else:
                     st.warning("⚠️ No policies uploaded yet")
-            except:
-                st.error("❌ System connection error")
+                    st.info("Contact admin to upload policy documents")
+            except Exception as e:
+                st.error(f"❌ System connection error: {str(e)}")
         
         # Admin login
         with st.expander("Admin Access"):
@@ -212,7 +229,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Function to get relevant context
+# Function to get relevant context with better debugging
 def get_relevant_context(query, k=5):
     try:
         if PINECONE_API_KEY:
@@ -220,26 +237,41 @@ def get_relevant_context(query, k=5):
                 model_name="sentence-transformers/all-MiniLM-L6-v2"
             )
             
+            # Initialize vector store
             vectorstore = PineconeVectorStore(
                 index_name="finance-policy",
                 embedding=embeddings
             )
             
+            # Check if index has any data
+            pc = Pinecone(api_key=PINECONE_API_KEY)
+            index = pc.Index("finance-policy")
+            stats = index.describe_index_stats()
+            
+            if stats['total_vector_count'] == 0:
+                return None  # No documents uploaded
+            
+            # Perform search
             docs = vectorstore.similarity_search_with_score(query, k=k)
+            
+            if not docs:
+                return ""  # No relevant documents found
             
             context_parts = []
             for doc, score in docs:
-                source = doc.metadata.get('source_file', 'Unknown')
+                source = doc.metadata.get('source_file', 'Policy Document')
                 page = doc.metadata.get('page', 'Unknown')
                 context_parts.append(
-                    f"[Source: {source}, Page: {page}]\n{doc.page_content}\n"
+                    f"[Source: {source}, Page: {page}, Score: {score:.3f}]\n{doc.page_content}\n"
                 )
             
             return "\n---\n".join(context_parts)
-        return ""
+        return None
     except Exception as e:
-        st.error(f"Error retrieving context: {str(e)}")
-        return ""
+        # Show error in admin mode only
+        if is_admin():
+            st.error(f"Error retrieving context: {str(e)}")
+        return None
 
 # Function to generate response
 def generate_response(query, context):
@@ -291,15 +323,24 @@ if prompt := st.chat_input("Ask about finance policies..."):
         with st.spinner("Searching policy documents..."):
             context = get_relevant_context(prompt)
             
-            if not context:
-                response = """I couldn't find any relevant information in the policy documents. 
+            if context is None:  # No documents at all
+                response = """I couldn't find any policy documents in the system. 
 
-This could mean:
-- No policy documents have been uploaded yet
-- Your question doesn't match any content in the uploaded policies
+**Next steps:**
+1. Contact your IT administrator to upload policy documents
+2. Or access admin mode to upload documents yourself
 
-Please try rephrasing your question or contact IT support."""
-            else:
+The system is working, but no policy documents have been uploaded yet."""
+            elif context == "":  # Documents exist but no matches
+                response = f"""I found policy documents in the system, but none seem to contain information about "{prompt}".
+
+**Try:**
+- Rephrasing your question
+- Using different keywords
+- Asking about general policy topics
+
+If you believe this information should be available, contact your administrator."""
+            else:  # Found relevant content
                 response = generate_response(prompt, context)
             
             st.markdown(response)
