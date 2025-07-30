@@ -1,2 +1,7 @@
 streamlit
-openai
+google-generativeai
+langchain
+langchain-community
+chromadb
+pypdf
+sentence-transformers
