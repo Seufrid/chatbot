@@ -7,6 +7,12 @@ from langchain.embeddings import HuggingFaceEmbeddings
 import os
 import tempfile
 
+# At the top of your file, after imports
+if "GOOGLE_API_KEY" in st.secrets:
+    default_api_key = st.secrets["GOOGLE_API_KEY"]
+else:
+    default_api_key = ""
+
 # Configure page
 st.set_page_config(
     page_title="Finance Policy Assistant",
@@ -23,7 +29,7 @@ with st.sidebar:
     st.header("Setup")
     
     # API Key input
-    api_key = st.text_input("Enter Google Gemini API Key", type="password")
+    api_key = st.text_input("Enter Google Gemini API Key", type="password", value=default_api_key)
     
     if api_key:
         genai.configure(api_key=api_key)
