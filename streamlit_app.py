@@ -3,8 +3,8 @@ import google.generativeai as genai
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Pinecone
-import pinecone
+from langchain_pinecone import PineconeVectorStore
+from pinecone import Pinecone, ServerlessSpec
 import os
 import tempfile
 
@@ -23,12 +23,9 @@ st.markdown("Ask me anything about company finance policies in English or Bahasa
 @st.cache_resource
 def init_pinecone():
     """Initialize Pinecone connection"""
-    # Get Pinecone credentials from Streamlit secrets or sidebar
-    if "PINECONE_API_KEY" in st.secrets and "PINECONE_ENV" in st.secrets:
-        pc_api_key = st.secrets["PINECONE_API_KEY"]
-        pc_env = st.secrets["PINECONE_ENV"]
-        return pc_api_key, pc_env
-    return None, None
+    if "PINECONE_API_KEY" in st.secrets:
+        return st.secrets["PINECONE_API_KEY"]
+    return None
 
 # Sidebar for setup
 with st.sidebar:
@@ -38,28 +35,53 @@ with st.sidebar:
     api_key = st.text_input("Enter Google Gemini API Key", type="password",
                            value=st.secrets.get("GOOGLE_API_KEY", ""))
     
-    # Pinecone setup (only show if not in secrets)
-    pc_api_key, pc_env = init_pinecone()
+    # Pinecone setup
+    pc_api_key = init_pinecone()
     
     if not pc_api_key:
         st.subheader("Pinecone Setup")
         pc_api_key = st.text_input("Pinecone API Key", type="password")
-        pc_env = st.text_input("Pinecone Environment", placeholder="e.g., us-east-1-aws")
     
     if api_key:
         genai.configure(api_key=api_key)
     
-    # PDF upload for initial setup
+    # Initialize Pinecone if we have the key
+    if pc_api_key:
+        try:
+            pc = Pinecone(api_key=pc_api_key)
+            
+            # Create index if it doesn't exist
+            index_name = "finance-policy"
+            if index_name not in pc.list_indexes().names():
+                pc.create_index(
+                    name=index_name,
+                    dimension=384,  # for all-MiniLM-L6-v2
+                    metric='cosine',
+                    spec=ServerlessSpec(
+                        cloud='aws',
+                        region='us-east-1'
+                    )
+                )
+                st.info("Created new Pinecone index!")
+            
+            # Check index stats
+            index = pc.Index(index_name)
+            stats = index.describe_index_stats()
+            if stats['total_vector_count'] > 0:
+                st.success(f"✅ Vector database ready: {stats['total_vector_count']} vectors")
+            else:
+                st.warning("⚠️ No vectors in database. Please upload a PDF.")
+                
+        except Exception as e:
+            st.error(f"Pinecone connection error: {str(e)}")
+    
+    # PDF upload
     st.subheader("Upload Policy Document")
     uploaded_file = st.file_uploader("Upload Policy PDF", type="pdf")
     
-    if st.button("Process PDF") and uploaded_file and api_key and pc_api_key and pc_env:
+    if st.button("Process PDF") and uploaded_file and api_key and pc_api_key:
         with st.spinner("Processing PDF... This may take a few minutes."):
             try:
-                # Initialize Pinecone
-                pc = pinecone.Pinecone(api_key=pc_api_key)
-                index = pc.Index("finance-policy")
-                
                 # Save uploaded file temporarily
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
                     tmp_file.write(uploaded_file.read())
@@ -82,8 +104,8 @@ with st.sidebar:
                     model_name="sentence-transformers/all-MiniLM-L6-v2"
                 )
                 
-                # Create vector store in Pinecone
-                vectorstore = Pinecone.from_documents(
+                # Create vector store
+                vectorstore = PineconeVectorStore.from_documents(
                     documents=chunks,
                     embedding=embeddings,
                     index_name="finance-policy"
@@ -97,19 +119,6 @@ with st.sidebar:
                 
             except Exception as e:
                 st.error(f"Error processing PDF: {str(e)}")
-
-    # Check index status
-    if pc_api_key and pc_env:
-        try:
-            pc = pinecone.Pinecone(api_key=pc_api_key)
-            index = pc.Index("finance-policy")
-            stats = index.describe_index_stats()
-            if stats['total_vector_count'] > 0:
-                st.success(f"✅ Vector database ready: {stats['total_vector_count']} vectors")
-            else:
-                st.warning("⚠️ No vectors in database. Please upload a PDF.")
-        except:
-            st.error("❌ Could not connect to Pinecone")
 
 # Initialize chat history
 if "messages" not in st.session_state:
@@ -128,23 +137,16 @@ for message in st.session_state.messages:
 # Function to get relevant context from Pinecone
 def get_relevant_context(query, k=3):
     try:
-        pc_api_key, pc_env = init_pinecone()
-        if not pc_api_key:
-            # Try to get from sidebar inputs
-            pc_api_key = st.session_state.get('pc_api_key')
-            pc_env = st.session_state.get('pc_env')
+        pc_api_key = init_pinecone() or st.session_state.get('pc_api_key')
         
-        if pc_api_key and pc_env:
-            # Initialize Pinecone
-            pc = pinecone.Pinecone(api_key=pc_api_key)
-            
+        if pc_api_key:
             # Initialize embeddings
             embeddings = HuggingFaceEmbeddings(
                 model_name="sentence-transformers/all-MiniLM-L6-v2"
             )
             
             # Load existing vector store
-            vectorstore = Pinecone.from_existing_index(
+            vectorstore = PineconeVectorStore(
                 index_name="finance-policy",
                 embedding=embeddings
             )
@@ -202,8 +204,8 @@ if prompt := st.chat_input("Ask about finance policies... (Tanya tentang polisi 
         st.error("Please enter your Google Gemini API key in the sidebar first.")
         st.stop()
     
-    if not pc_api_key or not pc_env:
-        st.error("Please enter your Pinecone credentials in the sidebar.")
+    if not pc_api_key:
+        st.error("Please enter your Pinecone API key in the sidebar.")
         st.stop()
     
     # Add user message to chat history
