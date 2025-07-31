@@ -71,7 +71,7 @@ def test_search_function(query):
                 try:
                     results = index.query(
                         vector=query_embedding,
-                        top_k=1,  # Just get one for testing
+                        top_k=1,
                         include_metadata=True,
                         include_values=False,
                         namespace=namespace
@@ -79,19 +79,13 @@ def test_search_function(query):
                     
                     results_summary.append(f"Namespace '{namespace}': {len(results['matches'])} matches")
                     
-                    # Show first match details
                     if results['matches']:
                         first_match = results['matches'][0]
                         results_summary.append(f"  - Score: {first_match['score']:.3f}")
-                        results_summary.append(f"  - Has text field: {'text' in first_match.get('metadata', {})}")
-                        
-                        # Show a snippet of the text content
                         text_content = first_match.get('metadata', {}).get('text', '')
                         if text_content:
                             snippet = text_content[:200] + "..." if len(text_content) > 200 else text_content
                             results_summary.append(f"  - Text snippet: {snippet}")
-                        else:
-                            results_summary.append(f"  - No text content found")
                         
                 except Exception as e:
                     results_summary.append(f"Namespace '{namespace}': Error - {str(e)}")
@@ -101,7 +95,7 @@ def test_search_function(query):
     except Exception as e:
         return f"Error in test: {str(e)}"
 
-# FIXED search function
+# Search function
 def get_relevant_context(query, k=3):
     try:
         if not PINECONE_API_KEY:
@@ -124,7 +118,7 @@ def get_relevant_context(query, k=3):
         
         # Search each namespace
         for namespace in namespaces:
-            if namespace:  # Skip empty namespace
+            if namespace:
                 try:
                     results = index.query(
                         vector=query_embedding,
@@ -135,10 +129,8 @@ def get_relevant_context(query, k=3):
                     )
                     
                     for match in results['matches']:
-                        # Extract text from metadata
                         text_content = match['metadata'].get('text', '')
                         
-                        # Only include if we have actual text content
                         if text_content and len(text_content.strip()) > 20:
                             all_results.append({
                                 'score': match['score'],
@@ -207,45 +199,23 @@ Answer:"""
     except Exception as e:
         return f"Sorry, I encountered an error: {str(e)}"
 
-# Enhanced PDF text extraction function
-def extract_and_validate_text(documents, uploaded_file_name):
-    """Extract and validate text from PDF documents"""
-    
-    # Check if documents have content
+# Streamlined text validation function
+def validate_pdf_text(documents):
+    """Quick validation to ensure PDF has readable text"""
     total_text = ""
-    page_texts = []
+    for doc in documents:
+        total_text += doc.page_content.strip() + " "
     
-    for i, doc in enumerate(documents):
-        page_text = doc.page_content.strip()
-        page_texts.append(page_text)
-        total_text += page_text + " "
-        
-        # Show sample from first few pages
-        if i < 3 and page_text:
-            st.write(f"📄 Page {i+1} sample: {page_text[:200]}...")
-        elif i < 3:
-            st.write(f"📄 Page {i+1}: No text found")
-    
-    # Analyze text content
     text_length = len(total_text.strip())
     word_count = len(total_text.split())
     
-    st.write(f"📊 Text analysis:")
-    st.write(f"   - Total characters: {text_length:,}")
-    st.write(f"   - Total words: {word_count:,}")
-    st.write(f"   - Average per page: {word_count/len(documents):.1f} words")
-    
-    # Check if this looks like a scanned document
     if text_length < 100:
-        st.error("❌ Very little text found. This might be a scanned/image-based PDF.")
-        st.info("💡 Try using an OCR tool to convert the PDF to text first, or use a different PDF.")
-        return False, []
+        return False, "Very little text found. This might be a scanned/image-based PDF that needs OCR processing."
     
     if word_count < 50:
-        st.warning("⚠️ Very few words found. The PDF might have formatting issues.")
-        return False, []
+        return False, "Very few words found. The PDF might have formatting issues."
     
-    return True, documents
+    return True, f"Text validation passed: {word_count:,} words found"
 
 # Admin Panel
 if is_admin():
@@ -286,15 +256,12 @@ if is_admin():
                             display_name = ns.replace('_', ' ').replace('(', '').replace(')', '')
                             st.text(f"📄 {display_name}: {ns_stats['vector_count']} chunks")
                 
-                # Test search button
+                # Test buttons
                 if st.button("Test Search Function"):
-                    st.write("Testing search with query: 'reimbursement'")
                     test_result = test_search_function("reimbursement")
                     st.code(test_result)
                 
-                # Test context extraction
                 if st.button("Test Context Extraction"):
-                    st.write("Testing full context extraction...")
                     context = get_relevant_context("reimbursement", k=2)
                     if context:
                         st.write("✅ Context found!")
@@ -305,7 +272,7 @@ if is_admin():
             except Exception as e:
                 st.error(f"Error fetching stats: {str(e)}")
         
-        # PDF upload section with enhanced text extraction
+        # Streamlined PDF upload section
         st.subheader("Upload Policy Documents")
         
         # Show current usage
@@ -321,7 +288,6 @@ if is_admin():
         uploaded_file = st.file_uploader("Choose PDF file", type="pdf")
 
         if st.button("Process PDF", type="primary") and uploaded_file:
-            # Check if file already exists
             existing_namespaces = list(stats.get('namespaces', {}).keys())
             proposed_namespace = uploaded_file.name.replace('.pdf', '').replace(' ', '_')
             
@@ -335,7 +301,7 @@ if is_admin():
                 try:
                     # Step 1: Save file
                     status_text.text("📁 Saving uploaded file...")
-                    progress_bar.progress(10)
+                    progress_bar.progress(15)
                     
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
                         tmp_file.write(uploaded_file.read())
@@ -345,7 +311,7 @@ if is_admin():
                     
                     # Step 2: Load PDF
                     status_text.text("📄 Loading PDF content...")
-                    progress_bar.progress(20)
+                    progress_bar.progress(30)
                     
                     loader = PyPDFLoader(tmp_file_path)
                     documents = loader.load()
@@ -357,82 +323,72 @@ if is_admin():
                         os.unlink(tmp_file_path)
                         st.stop()
                     
-                    # Step 2.5: Validate text content - NEW STEP
+                    # Step 3: Validate text content
                     status_text.text("🔍 Validating text content...")
-                    progress_bar.progress(25)
+                    progress_bar.progress(40)
                     
-                    has_valid_text, validated_docs = extract_and_validate_text(documents, uploaded_file.name)
+                    has_valid_text, validation_message = validate_pdf_text(documents)
                     
                     if not has_valid_text:
-                        st.error("❌ Cannot process PDF: Insufficient text content")
+                        st.error(f"❌ Cannot process PDF: Insufficient text content")
+                        st.info(f"💡 Issue: {validation_message}")
+                        st.info("🔧 Solution: Use an OCR tool to convert the PDF to text-searchable format first.")
                         os.unlink(tmp_file_path)
                         st.stop()
                     
-                    # Step 3: Add metadata
-                    status_text.text("🏷️ Adding metadata...")
-                    progress_bar.progress(35)
+                    st.write(f"✅ {validation_message}")
                     
-                    for i, doc in enumerate(validated_docs):
+                    # Step 4: Add metadata
+                    status_text.text("🏷️ Adding metadata...")
+                    progress_bar.progress(50)
+                    
+                    for i, doc in enumerate(documents):
                         doc.metadata.update({
                             'source_file': uploaded_file.name,
                             'page': i + 1,
                             'upload_date': datetime.now().isoformat(),
-                            'total_pages': len(validated_docs)
+                            'total_pages': len(documents)
                         })
                     
-                    # Step 4: Split documents with more aggressive settings
+                    # Step 5: Split documents
                     status_text.text("✂️ Splitting into chunks...")
-                    progress_bar.progress(45)
+                    progress_bar.progress(60)
                     
-                    # Use more aggressive text splitting
                     text_splitter = RecursiveCharacterTextSplitter(
-                        chunk_size=800,  # Smaller chunks
-                        chunk_overlap=100,  # Less overlap
+                        chunk_size=1000,
+                        chunk_overlap=200,
                         length_function=len,
                         separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
                     )
                     
-                    chunks = text_splitter.split_documents(validated_docs)
+                    chunks = text_splitter.split_documents(documents)
                     
                     # Filter out very short chunks
                     valid_chunks = [chunk for chunk in chunks if len(chunk.page_content.strip()) > 20]
                     
-                    st.write(f"✂️ Split into {len(chunks)} total chunks")
-                    st.write(f"✅ Keeping {len(valid_chunks)} chunks with sufficient content")
+                    st.write(f"✂️ Created {len(valid_chunks)} searchable chunks")
                     
-                    if len(valid_chunks) == 0:
-                        st.error("❌ No valid chunks created. Text might be too short or fragmented.")
-                        os.unlink(tmp_file_path)
-                        st.stop()
-                    
-                    # Step 5: Check limits
+                    # Step 6: Check limits
                     status_text.text("🔍 Checking vector limits...")
-                    progress_bar.progress(55)
+                    progress_bar.progress(70)
                     
                     new_total = stats['total_vector_count'] + len(valid_chunks)
                     if new_total > 100000:
                         st.error(f"❌ Cannot upload: Would exceed free tier limit ({new_total:,}/100,000 vectors)")
-                        st.info(f"💡 Try reducing chunk size or removing old documents first")
                         os.unlink(tmp_file_path)
                         st.stop()
                     
-                    # Step 6: Create embeddings
-                    status_text.text("🧠 Creating embeddings...")
-                    progress_bar.progress(65)
+                    # Step 7: Create embeddings and upload
+                    status_text.text("🧠 Creating embeddings and uploading...")
+                    progress_bar.progress(80)
                     
                     embeddings = HuggingFaceEmbeddings(
                         model_name="sentence-transformers/all-MiniLM-L6-v2"
                     )
                     
-                    # Step 7: Upload to Pinecone
-                    status_text.text("📤 Uploading to vector database...")
-                    progress_bar.progress(75)
-                    
                     namespace = proposed_namespace
-                    st.write(f"📤 Uploading {len(valid_chunks)} chunks to namespace: {namespace}")
-                    
                     vectorstore = PineconeVectorStore.from_documents(
-                        documents=valid_chunks,  # Use filtered chunks
+                        documents=valid_chunks,
                         embedding=embeddings,
                         index_name="finance-policy",
                         namespace=namespace
@@ -442,8 +398,7 @@ if is_admin():
                     status_text.text("🔍 Verifying upload...")
                     progress_bar.progress(90)
                     
-                    # Wait for Pinecone to update
-                    time.sleep(5)  # Longer wait
+                    time.sleep(3)  # Wait for Pinecone to update
                     
                     # Clear cache and get fresh stats
                     st.cache_resource.clear()
@@ -462,32 +417,27 @@ if is_admin():
                         
                         # Clean up
                         os.unlink(tmp_file_path)
-                        st.write("🧹 Cleaned up temporary files")
                         
-                        # Force refresh after a delay
+                        # Force refresh
                         st.balloons()
                         time.sleep(2)
                         st.rerun()
                     else:
                         st.error("❌ Upload verification failed - vector count didn't increase")
-                        st.write(f"Expected: {stats['total_vector_count'] + len(valid_chunks):,}, Got: {new_count:,}")
                         st.info("💡 This might be a temporary delay. Try refreshing the page in a few minutes.")
                 
                 except Exception as e:
                     st.error(f"❌ Error processing PDF: {str(e)}")
-                    st.write("Full error details:")
-                    st.code(str(e))
                     
                     # Clean up on error
                     if 'tmp_file_path' in locals() and os.path.exists(tmp_file_path):
                         os.unlink(tmp_file_path)
-                        st.write("🧹 Cleaned up temporary files after error")
                 finally:
                     # Clean up progress indicators
                     progress_bar.empty()
                     status_text.empty()
 
-        # Add management buttons
+        # Management buttons
         col1, col2 = st.columns(2)
         with col1:
             if st.button("🔄 Refresh Stats", type="secondary"):
@@ -544,6 +494,7 @@ else:
         - Financial Policies and Procedures  
         - Purchasing Policies
         - Debt Management and Write-Off Policy
+        - Stock Management Policy
         """)
         
         # Show system status
@@ -604,8 +555,9 @@ if prompt := st.chat_input("Ask about finance policies..."):
 
 Try rephrasing your question or asking about topics like:
 - Asset management procedures
-- Financial approval processes
+- Financial approval processes  
 - Purchasing and procurement policies
+- Stock management procedures
 - Debt management procedures"""
             else:
                 response = generate_response(prompt, context)
