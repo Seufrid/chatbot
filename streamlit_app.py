@@ -453,51 +453,80 @@ if is_admin():
             st.subheader("🗑️ Document Management")
             
             if stats.get('namespaces'):
+                # Individual document deletion
+                st.write("**Delete Individual Document:**")
                 doc_to_delete = st.selectbox(
                     "Select document to delete",
                     [ns for ns in stats['namespaces'].keys() if ns],
                     format_func=lambda x: x.replace('_', ' ')
                 )
                 
-                if st.button("Delete Selected Document", type="secondary"):
-                    if st.checkbox("I understand this will permanently delete this document"):
-                        try:
-                            index.delete(namespace=doc_to_delete, delete_all=True)
-                            st.success(f"Deleted {doc_to_delete.replace('_', ' ')}")
-                            time.sleep(2)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error deleting: {str(e)}")
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    delete_single = st.button("Delete Selected", type="secondary", key="delete_single")
+                with col2:
+                    confirm_single = st.checkbox("Confirm deletion", key="confirm_single")
                 
-                # Clear all vectors
-                with st.expander("⚠️ Danger Zone"):
-                    st.warning("These actions cannot be undone!")
-                    if st.button("Clear ALL Documents", type="secondary"):
-                        if st.checkbox("I understand this will delete ALL data"):
-                            try:
-                                index.delete(delete_all=True)
-                                st.success("All documents cleared!")
-                                time.sleep(2)
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Error clearing documents: {str(e)}")
+                if delete_single and confirm_single:
+                    try:
+                        with st.spinner(f"Deleting {doc_to_delete}..."):
+                            index.delete(namespace=doc_to_delete, delete_all=True)
+                            st.success(f"✅ Deleted {doc_to_delete.replace('_', ' ')}")
+                            time.sleep(3)
+                            st.cache_resource.clear()
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error deleting: {str(e)}")
+                
+                st.markdown("---")
+            
+            # Clear all documents
+            st.write("**⚠️ DANGER ZONE - Clear All Documents:**")
+            st.warning("This will permanently delete ALL policy documents from the database!")
+            
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                clear_all = st.button("🗑️ CLEAR ALL", type="secondary", key="clear_all")
+            with col2:
+                confirm_all = st.checkbox("I understand this will delete ALL data permanently", key="confirm_all")
+            
+            if clear_all and confirm_all:
+                try:
+                    with st.spinner("Clearing all documents..."):
+                        # Force clear cache first
+                        st.cache_resource.clear()
+                        
+                        # Reinitialize connection
+                        pc = Pinecone(api_key=PINECONE_API_KEY)
+                        index = pc.Index("finance-policy")
+                        
+                        # Delete all vectors
+                        index.delete(delete_all=True)
+                        
+                        st.success("✅ All documents cleared!")
+                        
+                        # Wait and refresh
+                        time.sleep(3)
+                        st.cache_resource.clear()
+                        st.rerun()
+                        
+                except Exception as e:
+                    st.error(f"❌ Error clearing all documents: {str(e)}")
+                    st.write("Try the manual Python script method instead.")
 
-# Regular User Sidebar
+# Regular User Sidebar - UPDATED WITH DYNAMIC DOCUMENTS
 else:
     with st.sidebar:
         st.header("ℹ️ About")
         st.markdown("""
         This assistant helps you find information about company finance policies.
         
-        **Available documents:**
-        - Asset Management Policy
-        - Financial Policies and Procedures  
-        - Purchasing Policies
-        - Debt Management and Write-Off Policy
-        - Stock Management Policy
+        **How to use:**
+        - Type your question in any language
+        - Get instant answers from policy documents
         """)
         
-        # Show system status
+        # Show system status and available documents dynamically
         pc = init_pinecone()
         if pc:
             try:
@@ -507,8 +536,20 @@ else:
                 if stats['total_vector_count'] > 0:
                     st.success(f"✅ System ready")
                     st.info(f"📊 {stats['total_vector_count']} document chunks available")
+                    
+                    # Show actually available documents
+                    if stats.get('namespaces'):
+                        st.markdown("**Available documents:**")
+                        for ns in stats['namespaces'].keys():
+                            if ns:
+                                # Clean up the namespace name for display
+                                display_name = ns.replace('_', ' ').replace('(', '').replace(')', '')
+                                st.markdown(f"• {display_name}")
+                    
                 else:
                     st.warning("⚠️ No policies uploaded yet")
+                    st.info("Contact admin to upload policy documents")
+                    
             except Exception as e:
                 st.error(f"❌ System connection error: {str(e)}")
         
