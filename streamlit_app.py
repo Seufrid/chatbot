@@ -96,7 +96,7 @@ def test_search_function(query):
         return f"Error in test: {str(e)}"
 
 # Search function
-def get_relevant_context(query, k=3):
+def get_relevant_context(query, k=6):
     try:
         if not PINECONE_API_KEY:
             return None
@@ -171,7 +171,7 @@ def generate_response(query, context):
         
         chat_history = "\n".join([
             f"{msg['role'].upper()}: {msg['content']}" 
-            for msg in st.session_state.messages[-4:]
+            for msg in st.session_state.messages[-10:]
         ])
         
         prompt = f"""You are a helpful assistant for finance department employees. Answer questions about company finance policies based on the provided context.
