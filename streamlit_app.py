@@ -49,7 +49,7 @@ def init_pinecone():
             return None
     return None
 
-# Test function for debugging - MOVED HERE
+# Test function for debugging
 def test_search_function(query):
     try:
         pc = Pinecone(api_key=PINECONE_API_KEY)
@@ -70,7 +70,7 @@ def test_search_function(query):
                 try:
                     results = index.query(
                         vector=query_embedding,
-                        top_k=3,
+                        top_k=1,  # Just get one for testing
                         include_metadata=True,
                         include_values=False,
                         namespace=namespace
@@ -82,30 +82,25 @@ def test_search_function(query):
                     if results['matches']:
                         first_match = results['matches'][0]
                         results_summary.append(f"  - Score: {first_match['score']:.3f}")
-                        results_summary.append(f"  - Metadata keys: {list(first_match.get('metadata', {}).keys())}")
+                        results_summary.append(f"  - Has text field: {'text' in first_match.get('metadata', {})}")
+                        
+                        # Show a snippet of the text content
+                        text_content = first_match.get('metadata', {}).get('text', '')
+                        if text_content:
+                            snippet = text_content[:200] + "..." if len(text_content) > 200 else text_content
+                            results_summary.append(f"  - Text snippet: {snippet}")
+                        else:
+                            results_summary.append(f"  - No text content found")
                         
                 except Exception as e:
                     results_summary.append(f"Namespace '{namespace}': Error - {str(e)}")
-        
-        # Also try default namespace
-        try:
-            results = index.query(
-                vector=query_embedding,
-                top_k=3,
-                include_metadata=True,
-                include_values=False
-            )
-            results_summary.append(f"Default namespace: {len(results['matches'])} matches")
-            
-        except Exception as e:
-            results_summary.append(f"Default namespace: Error - {str(e)}")
         
         return "\n".join(results_summary)
             
     except Exception as e:
         return f"Error in test: {str(e)}"
 
-# SIMPLIFIED search function
+# FIXED search function
 def get_relevant_context(query, k=3):
     try:
         if not PINECONE_API_KEY:
@@ -139,21 +134,17 @@ def get_relevant_context(query, k=3):
                     )
                     
                     for match in results['matches']:
-                        # Try different metadata field names
-                        text_content = (
-                            match['metadata'].get('text') or 
-                            match['metadata'].get('page_content') or
-                            match['metadata'].get('content') or
-                            str(match.get('metadata', {}))
-                        )
+                        # Extract text from metadata - THIS WAS THE BUG!
+                        text_content = match['metadata'].get('text', '')
                         
-                        all_results.append({
-                            'score': match['score'],
-                            'text': text_content,
-                            'source': match['metadata'].get('source_file', namespace),
-                            'page': match['metadata'].get('page', 'Unknown'),
-                            'metadata': match['metadata']  # Keep full metadata for debugging
-                        })
+                        # Only include if we have actual text content
+                        if text_content and len(text_content.strip()) > 20:
+                            all_results.append({
+                                'score': match['score'],
+                                'text': text_content,
+                                'source': match['metadata'].get('source_file', namespace.replace('_', ' ')),
+                                'page': match['metadata'].get('page', 'Unknown')
+                            })
                         
                 except Exception as e:
                     continue
@@ -169,12 +160,11 @@ def get_relevant_context(query, k=3):
         
         context_parts = []
         for result in best_results:
-            if result['text'] and len(result['text']) > 50:  # Only include substantial text
-                context_parts.append(
-                    f"[Source: {result['source']}, Page: {result['page']}, Score: {result['score']:.3f}]\n{result['text']}\n"
-                )
+            context_parts.append(
+                f"[Source: {result['source']}, Page: {result['page']}, Relevance: {result['score']:.3f}]\n{result['text']}\n"
+            )
         
-        return "\n---\n".join(context_parts) if context_parts else ""
+        return "\n---\n".join(context_parts)
         
     except Exception as e:
         if is_admin():
@@ -186,19 +176,28 @@ def generate_response(query, context):
     try:
         model = genai.GenerativeModel('gemini-pro')
         
+        chat_history = "\n".join([
+            f"{msg['role'].upper()}: {msg['content']}" 
+            for msg in st.session_state.messages[-4:]
+        ])
+        
         prompt = f"""You are a helpful assistant for finance department employees. Answer questions about company finance policies based on the provided context.
 
 Context from company policies:
 {context}
 
+Recent conversation:
+{chat_history}
+
 User Question: {query}
 
 Instructions:
 - Answer based on the provided context from the policy documents
-- Be specific and cite the source document when possible
+- Be specific and cite the source document and page when possible
 - If the answer isn't in the context, say so politely
 - Be concise but thorough
 - Include relevant policy references when available
+- Respond in the same language as the question
 
 Answer:"""
 
@@ -247,6 +246,16 @@ if is_admin():
                     st.write("Testing search with query: 'reimbursement'")
                     test_result = test_search_function("reimbursement")
                     st.code(test_result)
+                
+                # Test context extraction
+                if st.button("Test Context Extraction"):
+                    st.write("Testing full context extraction...")
+                    context = get_relevant_context("reimbursement", k=2)
+                    if context:
+                        st.write("✅ Context found!")
+                        st.text_area("Context Preview", context[:500] + "..." if len(context) > 500 else context, height=200)
+                    else:
+                        st.write("❌ No context returned")
                 
             except Exception as e:
                 st.error(f"Error fetching stats: {str(e)}")
@@ -316,6 +325,12 @@ else:
         st.header("ℹ️ About")
         st.markdown("""
         This assistant helps you find information about company finance policies.
+        
+        **Available documents:**
+        - Asset Management Policy
+        - Financial Policies and Procedures  
+        - Purchasing Policies
+        - Debt Management and Write-Off Policy
         """)
         
         # Show system status
@@ -374,13 +389,11 @@ if prompt := st.chat_input("Ask about finance policies..."):
             elif context == "":
                 response = f"""I searched through all policy documents but couldn't find specific information about "{prompt}". 
 
-**Available documents:**
-- Asset Management Policy
-- Financial Policies and Procedures  
-- Purchasing Policies
-- Debt Management and Write-Off Policy
-
-Try rephrasing your question or asking about topics like procurement, asset management, or financial procedures."""
+Try rephrasing your question or asking about topics like:
+- Asset management procedures
+- Financial approval processes
+- Purchasing and procurement policies
+- Debt management procedures"""
             else:
                 response = generate_response(prompt, context)
             
