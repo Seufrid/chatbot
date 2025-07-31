@@ -7,6 +7,7 @@ from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone, ServerlessSpec
 import os
 import tempfile
+import time
 from datetime import datetime
 
 # Configure page
@@ -134,7 +135,7 @@ def get_relevant_context(query, k=3):
                     )
                     
                     for match in results['matches']:
-                        # Extract text from metadata - THIS WAS THE BUG!
+                        # Extract text from metadata
                         text_content = match['metadata'].get('text', '')
                         
                         # Only include if we have actual text content
@@ -174,7 +175,7 @@ def get_relevant_context(query, k=3):
 # Function to generate response
 def generate_response(query, context):
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-pro')
         
         chat_history = "\n".join([
             f"{msg['role'].upper()}: {msg['content']}" 
@@ -233,6 +234,10 @@ if is_admin():
                 with col2:
                     st.metric("Dimensions", stats['dimension'])
                 
+                # Show usage bar
+                usage_percent = (stats['total_vector_count'] / 100000) * 100
+                st.progress(usage_percent / 100, text=f"Usage: {stats['total_vector_count']:,}/100,000 vectors ({usage_percent:.1f}%)")
+                
                 # Show namespaces
                 if stats.get('namespaces'):
                     st.subheader("Uploaded Documents")
@@ -260,23 +265,62 @@ if is_admin():
             except Exception as e:
                 st.error(f"Error fetching stats: {str(e)}")
         
-        # PDF upload section
+        # PDF upload section with improved handling
         st.subheader("Upload Policy Documents")
-        uploaded_file = st.file_uploader("Choose PDF file", type="pdf")
         
+        # Show current usage
+        if pc:
+            try:
+                index = pc.Index("finance-policy")
+                stats = index.describe_index_stats()
+                remaining = 100000 - stats['total_vector_count']
+                st.info(f"📊 Available space: ~{remaining//1000}k vectors remaining")
+            except:
+                pass
+
+        uploaded_file = st.file_uploader("Choose PDF file", type="pdf")
+
         if st.button("Process PDF", type="primary") and uploaded_file:
+            # Check if file already exists
+            existing_namespaces = list(stats.get('namespaces', {}).keys())
+            proposed_namespace = uploaded_file.name.replace('.pdf', '').replace(' ', '_')
+            
+            if any(proposed_namespace in ns for ns in existing_namespaces):
+                st.warning(f"⚠️ A document with similar name already exists. This will add to the existing document.")
+            
             with st.spinner(f"Processing {uploaded_file.name}..."):
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
                 try:
-                    # Save uploaded file temporarily
+                    # Step 1: Save file
+                    status_text.text("📁 Saving uploaded file...")
+                    progress_bar.progress(10)
+                    
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
                         tmp_file.write(uploaded_file.read())
                         tmp_file_path = tmp_file.name
                     
-                    # Load and process PDF
+                    st.write(f"📁 File size: {len(uploaded_file.getvalue()) / 1024 / 1024:.1f} MB")
+                    
+                    # Step 2: Load PDF
+                    status_text.text("📄 Loading PDF content...")
+                    progress_bar.progress(20)
+                    
                     loader = PyPDFLoader(tmp_file_path)
                     documents = loader.load()
                     
-                    # Add metadata
+                    st.write(f"📄 Loaded {len(documents)} pages from PDF")
+                    
+                    if len(documents) == 0:
+                        st.error("❌ No content found in PDF. Please check if the PDF is valid.")
+                        os.unlink(tmp_file_path)
+                        st.stop()
+                    
+                    # Step 3: Add metadata
+                    status_text.text("🏷️ Adding metadata...")
+                    progress_bar.progress(30)
+                    
                     for i, doc in enumerate(documents):
                         doc.metadata.update({
                             'source_file': uploaded_file.name,
@@ -285,7 +329,10 @@ if is_admin():
                             'total_pages': len(documents)
                         })
                     
-                    # Split documents
+                    # Step 4: Split documents
+                    status_text.text("✂️ Splitting into chunks...")
+                    progress_bar.progress(40)
+                    
                     text_splitter = RecursiveCharacterTextSplitter(
                         chunk_size=1000,
                         chunk_overlap=200,
@@ -293,13 +340,34 @@ if is_admin():
                     )
                     chunks = text_splitter.split_documents(documents)
                     
-                    # Create embeddings
+                    st.write(f"✂️ Split into {len(chunks)} chunks")
+                    
+                    # Step 5: Check limits
+                    status_text.text("🔍 Checking vector limits...")
+                    progress_bar.progress(50)
+                    
+                    new_total = stats['total_vector_count'] + len(chunks)
+                    if new_total > 100000:
+                        st.error(f"❌ Cannot upload: Would exceed free tier limit ({new_total:,}/100,000 vectors)")
+                        st.info(f"💡 Try reducing chunk size or removing old documents first")
+                        os.unlink(tmp_file_path)
+                        st.stop()
+                    
+                    # Step 6: Create embeddings
+                    status_text.text("🧠 Creating embeddings...")
+                    progress_bar.progress(60)
+                    
                     embeddings = HuggingFaceEmbeddings(
                         model_name="sentence-transformers/all-MiniLM-L6-v2"
                     )
                     
-                    # Add to vector store with namespace
-                    namespace = uploaded_file.name.replace('.pdf', '').replace(' ', '_')
+                    # Step 7: Upload to Pinecone
+                    status_text.text("📤 Uploading to vector database...")
+                    progress_bar.progress(70)
+                    
+                    namespace = proposed_namespace
+                    st.write(f"📤 Uploading to namespace: {namespace}")
+                    
                     vectorstore = PineconeVectorStore.from_documents(
                         documents=chunks,
                         embedding=embeddings,
@@ -307,17 +375,99 @@ if is_admin():
                         namespace=namespace
                     )
                     
-                    # Clean up
-                    os.unlink(tmp_file_path)
+                    # Step 8: Verify upload
+                    status_text.text("🔍 Verifying upload...")
+                    progress_bar.progress(90)
                     
-                    st.success(f"✅ Successfully processed {uploaded_file.name}")
-                    st.info(f"📊 Created {len(chunks)} searchable chunks from {len(documents)} pages")
-                    st.rerun()
+                    # Wait for Pinecone to update
+                    time.sleep(3)
                     
-                except Exception as e:
-                    st.error(f"Error processing PDF: {str(e)}")
-                    if 'tmp_file_path' in locals():
+                    # Clear cache and get fresh stats
+                    st.cache_resource.clear()
+                    pc = init_pinecone()
+                    index = pc.Index("finance-policy")
+                    new_stats = index.describe_index_stats()
+                    new_count = new_stats['total_vector_count']
+                    
+                    # Step 9: Complete
+                    status_text.text("✅ Upload completed!")
+                    progress_bar.progress(100)
+                    
+                    if new_count > stats['total_vector_count']:
+                        st.success(f"✅ Successfully processed {uploaded_file.name}")
+                        st.info(f"📊 Added {len(chunks)} chunks ({stats['total_vector_count']:,} → {new_count:,} total)")
+                        
+                        # Clean up
                         os.unlink(tmp_file_path)
+                        st.write("🧹 Cleaned up temporary files")
+                        
+                        # Force refresh after a delay
+                        st.balloons()
+                        time.sleep(2)
+                        st.rerun()
+                    else:
+                        st.error("❌ Upload verification failed - vector count didn't increase")
+                        st.write(f"Expected: {stats['total_vector_count'] + len(chunks):,}, Got: {new_count:,}")
+                        st.info("💡 This might be a temporary delay. Try refreshing the page in a few seconds.")
+                
+                except Exception as e:
+                    st.error(f"❌ Error processing PDF: {str(e)}")
+                    st.write("Full error details:")
+                    st.code(str(e))
+                    
+                    # Clean up on error
+                    if 'tmp_file_path' in locals() and os.path.exists(tmp_file_path):
+                        os.unlink(tmp_file_path)
+                        st.write("🧹 Cleaned up temporary files after error")
+                finally:
+                    # Clean up progress indicators
+                    progress_bar.empty()
+                    status_text.empty()
+
+        # Add management buttons
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔄 Refresh Stats", type="secondary"):
+                st.cache_resource.clear()
+                st.rerun()
+        
+        with col2:
+            if st.button("🗑️ Manage Documents", type="secondary"):
+                st.session_state.show_document_manager = not st.session_state.get('show_document_manager', False)
+        
+        # Document management section
+        if st.session_state.get('show_document_manager', False):
+            st.subheader("🗑️ Document Management")
+            
+            if stats.get('namespaces'):
+                doc_to_delete = st.selectbox(
+                    "Select document to delete",
+                    [ns for ns in stats['namespaces'].keys() if ns],
+                    format_func=lambda x: x.replace('_', ' ')
+                )
+                
+                if st.button("Delete Selected Document", type="secondary"):
+                    if st.checkbox("I understand this will permanently delete this document"):
+                        try:
+                            index.delete(namespace=doc_to_delete, delete_all=True)
+                            st.success(f"Deleted {doc_to_delete.replace('_', ' ')}")
+                            time.sleep(2)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error deleting: {str(e)}")
+                
+                # Clear all vectors
+                with st.expander("⚠️ Danger Zone"):
+                    st.warning("These actions cannot be undone!")
+                    if st.button("Clear ALL Documents", type="secondary"):
+                        if st.checkbox("I understand this will delete ALL data"):
+                            try:
+                                index.delete(delete_all=True)
+                                st.success("All documents cleared!")
+                                time.sleep(2)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error clearing documents: {str(e)}")
 
 # Regular User Sidebar
 else:
