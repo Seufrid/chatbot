@@ -91,16 +91,14 @@ if is_admin():
                 with col2:
                     st.metric("Dimensions", stats['dimension'])
                 
-                # Debug info
-                st.write("**Debug Info:**")
-                st.write(f"Index stats: {stats}")
-                
                 # Show namespaces (different PDFs)
                 if stats.get('namespaces'):
                     st.subheader("Uploaded Documents")
                     for ns, ns_stats in stats['namespaces'].items():
                         if ns:
-                            st.text(f"📄 {ns}: {ns_stats['vector_count']} chunks")
+                            # Clean up namespace display name
+                            display_name = ns.replace('_', ' ').replace('(', '').replace(')', '')
+                            st.text(f"📄 {display_name}: {ns_stats['vector_count']} chunks")
                         else:
                             st.text(f"📄 Default namespace: {ns_stats['vector_count']} chunks")
                 
@@ -127,8 +125,6 @@ if is_admin():
                     loader = PyPDFLoader(tmp_file_path)
                     documents = loader.load()
                     
-                    st.write(f"Loaded {len(documents)} pages from PDF")
-                    
                     # Add metadata
                     for i, doc in enumerate(documents):
                         doc.metadata.update({
@@ -146,19 +142,18 @@ if is_admin():
                     )
                     chunks = text_splitter.split_documents(documents)
                     
-                    st.write(f"Split into {len(chunks)} chunks")
-                    
                     # Create embeddings
                     embeddings = HuggingFaceEmbeddings(
                         model_name="sentence-transformers/all-MiniLM-L6-v2"
                     )
                     
-                    # Add to vector store WITHOUT namespace (simpler approach)
+                    # Add to vector store with namespace
+                    namespace = uploaded_file.name.replace('.pdf', '').replace(' ', '_')
                     vectorstore = PineconeVectorStore.from_documents(
                         documents=chunks,
                         embedding=embeddings,
-                        index_name="finance-policy"
-                        # Removed namespace to avoid complications
+                        index_name="finance-policy",
+                        namespace=namespace
                     )
                     
                     # Clean up
@@ -185,7 +180,7 @@ else:
         - Get instant answers from policy documents
         """)
         
-        # Show system status with more details
+        # Show system status
         pc = init_pinecone()
         if pc:
             try:
@@ -196,17 +191,15 @@ else:
                     st.success(f"✅ System ready")
                     st.info(f"📊 {stats['total_vector_count']} document chunks available")
                     
-                    # Show which documents are available
+                    # Show available documents
                     if stats.get('namespaces'):
                         st.write("**Available documents:**")
                         for ns, ns_stats in stats['namespaces'].items():
                             if ns:
-                                st.text(f"• {ns}")
-                            else:
-                                st.text(f"• Policy documents ({ns_stats['vector_count']} chunks)")
+                                display_name = ns.replace('_', ' ')
+                                st.text(f"• {display_name}")
                 else:
                     st.warning("⚠️ No policies uploaded yet")
-                    st.info("Contact admin to upload policy documents")
             except Exception as e:
                 st.error(f"❌ System connection error: {str(e)}")
         
@@ -229,48 +222,69 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Function to get relevant context with better debugging
-def get_relevant_context(query, k=5):
+# Function to get relevant context - FIXED VERSION
+def get_relevant_context(query, k=3):
     try:
-        if PINECONE_API_KEY:
-            embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2"
+        if not PINECONE_API_KEY:
+            return None
+            
+        # Initialize embeddings
+        embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
+        
+        # Get all namespaces
+        pc = Pinecone(api_key=PINECONE_API_KEY)
+        index = pc.Index("finance-policy")
+        stats = index.describe_index_stats()
+        
+        if stats['total_vector_count'] == 0:
+            return None
+        
+        # Search across ALL namespaces
+        all_docs = []
+        namespaces = list(stats.get('namespaces', {}).keys())
+        
+        for namespace in namespaces:
+            if namespace:  # Skip empty namespace
+                try:
+                    # Create vector store for this namespace
+                    vectorstore = PineconeVectorStore(
+                        index_name="finance-policy",
+                        embedding=embeddings,
+                        namespace=namespace
+                    )
+                    
+                    # Search in this namespace
+                    docs = vectorstore.similarity_search_with_score(query, k=k)
+                    all_docs.extend(docs)
+                    
+                except Exception as e:
+                    # Skip this namespace if error
+                    continue
+        
+        if not all_docs:
+            return ""
+        
+        # Sort by relevance score (lower is better for cosine similarity)
+        all_docs.sort(key=lambda x: x[1])
+        
+        # Take best results
+        best_docs = all_docs[:k]
+        
+        context_parts = []
+        for doc, score in best_docs:
+            source = doc.metadata.get('source_file', 'Policy Document')
+            page = doc.metadata.get('page', 'Unknown')
+            context_parts.append(
+                f"[Source: {source}, Page: {page}, Relevance: {1-score:.3f}]\n{doc.page_content}\n"
             )
-            
-            # Initialize vector store
-            vectorstore = PineconeVectorStore(
-                index_name="finance-policy",
-                embedding=embeddings
-            )
-            
-            # Check if index has any data
-            pc = Pinecone(api_key=PINECONE_API_KEY)
-            index = pc.Index("finance-policy")
-            stats = index.describe_index_stats()
-            
-            if stats['total_vector_count'] == 0:
-                return None  # No documents uploaded
-            
-            # Perform search
-            docs = vectorstore.similarity_search_with_score(query, k=k)
-            
-            if not docs:
-                return ""  # No relevant documents found
-            
-            context_parts = []
-            for doc, score in docs:
-                source = doc.metadata.get('source_file', 'Policy Document')
-                page = doc.metadata.get('page', 'Unknown')
-                context_parts.append(
-                    f"[Source: {source}, Page: {page}, Score: {score:.3f}]\n{doc.page_content}\n"
-                )
-            
-            return "\n---\n".join(context_parts)
-        return None
+        
+        return "\n---\n".join(context_parts)
+        
     except Exception as e:
-        # Show error in admin mode only
         if is_admin():
-            st.error(f"Error retrieving context: {str(e)}")
+            st.error(f"Search error: {str(e)}")
         return None
 
 # Function to generate response
@@ -280,10 +294,10 @@ def generate_response(query, context):
         
         chat_history = "\n".join([
             f"{msg['role'].upper()}: {msg['content']}" 
-            for msg in st.session_state.messages[-6:]
+            for msg in st.session_state.messages[-4:]
         ])
         
-        prompt = f"""You are a helpful assistant for finance department employees. Answer questions about company finance policies based on the provided context.
+        prompt = f"""You are a helpful assistant for finance department employees. Answer questions about company finance policies based on the provided context. You can respond in both English and Bahasa Malaysia.
 
 Context from company policies:
 {context}
@@ -294,10 +308,12 @@ Recent conversation:
 User Question: {query}
 
 Instructions:
-- Answer based ONLY on the provided context
-- If the answer isn't in the context, say "I couldn't find specific information about that in the policy documents"
+- Answer based on the provided context from the policy documents
+- Be specific and cite the source document when possible
+- If the answer isn't in the context, say so politely
 - Be concise but thorough
 - Respond in the same language as the question
+- Include relevant policy references or page numbers when available
 
 Answer:"""
 
@@ -323,24 +339,19 @@ if prompt := st.chat_input("Ask about finance policies..."):
         with st.spinner("Searching policy documents..."):
             context = get_relevant_context(prompt)
             
-            if context is None:  # No documents at all
-                response = """I couldn't find any policy documents in the system. 
+            if context is None:
+                response = """I couldn't find any policy documents in the system. Please contact your administrator to upload policy documents."""
+            elif context == "":
+                response = f"""I searched through all policy documents but couldn't find specific information about "{prompt}". 
 
-**Next steps:**
-1. Contact your IT administrator to upload policy documents
-2. Or access admin mode to upload documents yourself
+**Available documents:**
+- Asset Management Policy
+- Financial Policies and Procedures  
+- Purchasing Policies
+- Debt Management and Write-Off Policy
 
-The system is working, but no policy documents have been uploaded yet."""
-            elif context == "":  # Documents exist but no matches
-                response = f"""I found policy documents in the system, but none seem to contain information about "{prompt}".
-
-**Try:**
-- Rephrasing your question
-- Using different keywords
-- Asking about general policy topics
-
-If you believe this information should be available, contact your administrator."""
-            else:  # Found relevant content
+Try rephrasing your question or asking about general policy topics covered in these documents."""
+            else:
                 response = generate_response(prompt, context)
             
             st.markdown(response)
