@@ -43,21 +43,6 @@ def init_pinecone():
     if PINECONE_API_KEY:
         try:
             pc = Pinecone(api_key=PINECONE_API_KEY)
-            
-            # Create index if it doesn't exist
-            index_name = "finance-policy"
-            existing_indexes = [index.name for index in pc.list_indexes()]
-            
-            if index_name not in existing_indexes:
-                pc.create_index(
-                    name=index_name,
-                    dimension=384,  # for all-MiniLM-L6-v2
-                    metric='cosine',
-                    spec=ServerlessSpec(
-                        cloud='aws',
-                        region='us-east-1'
-                    )
-                )
             return pc
         except Exception as e:
             st.error(f"Pinecone initialization error: {str(e)}")
@@ -91,27 +76,26 @@ if is_admin():
                 with col2:
                     st.metric("Dimensions", stats['dimension'])
                 
-                # Show namespaces (different PDFs)
+                # Show namespaces
                 if stats.get('namespaces'):
                     st.subheader("Uploaded Documents")
                     for ns, ns_stats in stats['namespaces'].items():
                         if ns:
-                            # Clean up namespace display name
                             display_name = ns.replace('_', ' ').replace('(', '').replace(')', '')
                             st.text(f"📄 {display_name}: {ns_stats['vector_count']} chunks")
-                        else:
-                            st.text(f"📄 Default namespace: {ns_stats['vector_count']} chunks")
+                
+                # Test search button
+                if st.button("Test Search Function"):
+                    st.write("Testing search with query: 'reimbursement'")
+                    test_result = test_search_function("reimbursement")
+                    st.write(f"Test result: {test_result}")
                 
             except Exception as e:
                 st.error(f"Error fetching stats: {str(e)}")
         
         # PDF upload section
         st.subheader("Upload Policy Documents")
-        uploaded_file = st.file_uploader(
-            "Choose PDF file", 
-            type="pdf",
-            help="Upload finance policy documents."
-        )
+        uploaded_file = st.file_uploader("Choose PDF file", type="pdf")
         
         if st.button("Process PDF", type="primary") and uploaded_file:
             with st.spinner(f"Processing {uploaded_file.name}..."):
@@ -174,10 +158,6 @@ else:
         st.header("ℹ️ About")
         st.markdown("""
         This assistant helps you find information about company finance policies.
-        
-        **How to use:**
-        - Type your question in any language
-        - Get instant answers from policy documents
         """)
         
         # Show system status
@@ -190,14 +170,6 @@ else:
                 if stats['total_vector_count'] > 0:
                     st.success(f"✅ System ready")
                     st.info(f"📊 {stats['total_vector_count']} document chunks available")
-                    
-                    # Show available documents
-                    if stats.get('namespaces'):
-                        st.write("**Available documents:**")
-                        for ns, ns_stats in stats['namespaces'].items():
-                            if ns:
-                                display_name = ns.replace('_', ' ')
-                                st.text(f"• {display_name}")
                 else:
                     st.warning("⚠️ No policies uploaded yet")
             except Exception as e:
@@ -222,65 +194,113 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Function to get relevant context - FIXED VERSION
+# Test function for debugging
+def test_search_function(query):
+    try:
+        pc = Pinecone(api_key=PINECONE_API_KEY)
+        index = pc.Index("finance-policy")
+        
+        # Get embedding for query
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        query_embedding = embeddings.embed_query(query)
+        
+        # Try direct Pinecone query first
+        results = index.query(
+            vector=query_embedding,
+            top_k=3,
+            include_metadata=True,
+            include_values=False
+        )
+        
+        if results['matches']:
+            return f"Found {len(results['matches'])} matches using direct query"
+        else:
+            return "No matches found with direct query"
+            
+    except Exception as e:
+        return f"Error in test: {str(e)}"
+
+# SIMPLIFIED search function
 def get_relevant_context(query, k=3):
     try:
         if not PINECONE_API_KEY:
             return None
             
-        # Initialize embeddings
-        embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
-        
-        # Get all namespaces
+        # Direct Pinecone query approach
         pc = Pinecone(api_key=PINECONE_API_KEY)
         index = pc.Index("finance-policy")
+        
+        # Get embedding for the query
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        query_embedding = embeddings.embed_query(query)
+        
+        # Search directly in Pinecone across all namespaces
+        all_results = []
+        
+        # Get stats to find namespaces
         stats = index.describe_index_stats()
-        
-        if stats['total_vector_count'] == 0:
-            return None
-        
-        # Search across ALL namespaces
-        all_docs = []
         namespaces = list(stats.get('namespaces', {}).keys())
         
+        # Search each namespace
         for namespace in namespaces:
             if namespace:  # Skip empty namespace
                 try:
-                    # Create vector store for this namespace
-                    vectorstore = PineconeVectorStore(
-                        index_name="finance-policy",
-                        embedding=embeddings,
+                    results = index.query(
+                        vector=query_embedding,
+                        top_k=k,
+                        include_metadata=True,
+                        include_values=False,
                         namespace=namespace
                     )
                     
-                    # Search in this namespace
-                    docs = vectorstore.similarity_search_with_score(query, k=k)
-                    all_docs.extend(docs)
-                    
+                    for match in results['matches']:
+                        all_results.append({
+                            'score': match['score'],
+                            'text': match['metadata'].get('text', ''),
+                            'source': match['metadata'].get('source_file', namespace),
+                            'page': match['metadata'].get('page', 'Unknown')
+                        })
+                        
                 except Exception as e:
-                    # Skip this namespace if error
                     continue
         
-        if not all_docs:
+        # Also try without namespace (default namespace)
+        try:
+            results = index.query(
+                vector=query_embedding,
+                top_k=k,
+                include_metadata=True,
+                include_values=False
+            )
+            
+            for match in results['matches']:
+                all_results.append({
+                    'score': match['score'],
+                    'text': match['metadata'].get('text', ''),
+                    'source': match['metadata'].get('source_file', 'Policy Document'),
+                    'page': match['metadata'].get('page', 'Unknown')
+                })
+                
+        except Exception as e:
+            pass
+        
+        if not all_results:
             return ""
         
-        # Sort by relevance score (lower is better for cosine similarity)
-        all_docs.sort(key=lambda x: x[1])
+        # Sort by score (higher is better for Pinecone)
+        all_results.sort(key=lambda x: x['score'], reverse=True)
         
         # Take best results
-        best_docs = all_docs[:k]
+        best_results = all_results[:k]
         
         context_parts = []
-        for doc, score in best_docs:
-            source = doc.metadata.get('source_file', 'Policy Document')
-            page = doc.metadata.get('page', 'Unknown')
-            context_parts.append(
-                f"[Source: {source}, Page: {page}, Relevance: {1-score:.3f}]\n{doc.page_content}\n"
-            )
+        for result in best_results:
+            if result['text']:  # Only include if we have text
+                context_parts.append(
+                    f"[Source: {result['source']}, Page: {result['page']}, Score: {result['score']:.3f}]\n{result['text']}\n"
+                )
         
-        return "\n---\n".join(context_parts)
+        return "\n---\n".join(context_parts) if context_parts else ""
         
     except Exception as e:
         if is_admin():
@@ -292,18 +312,10 @@ def generate_response(query, context):
     try:
         model = genai.GenerativeModel('gemini-pro')
         
-        chat_history = "\n".join([
-            f"{msg['role'].upper()}: {msg['content']}" 
-            for msg in st.session_state.messages[-4:]
-        ])
-        
-        prompt = f"""You are a helpful assistant for finance department employees. Answer questions about company finance policies based on the provided context. You can respond in both English and Bahasa Malaysia.
+        prompt = f"""You are a helpful assistant for finance department employees. Answer questions about company finance policies based on the provided context.
 
 Context from company policies:
 {context}
-
-Recent conversation:
-{chat_history}
 
 User Question: {query}
 
@@ -312,8 +324,7 @@ Instructions:
 - Be specific and cite the source document when possible
 - If the answer isn't in the context, say so politely
 - Be concise but thorough
-- Respond in the same language as the question
-- Include relevant policy references or page numbers when available
+- Include relevant policy references when available
 
 Answer:"""
 
@@ -340,7 +351,7 @@ if prompt := st.chat_input("Ask about finance policies..."):
             context = get_relevant_context(prompt)
             
             if context is None:
-                response = """I couldn't find any policy documents in the system. Please contact your administrator to upload policy documents."""
+                response = "I couldn't connect to the document database. Please try again."
             elif context == "":
                 response = f"""I searched through all policy documents but couldn't find specific information about "{prompt}". 
 
@@ -350,7 +361,7 @@ if prompt := st.chat_input("Ask about finance policies..."):
 - Purchasing Policies
 - Debt Management and Write-Off Policy
 
-Try rephrasing your question or asking about general policy topics covered in these documents."""
+Try rephrasing your question or asking about topics like procurement, asset management, or financial procedures."""
             else:
                 response = generate_response(prompt, context)
             
