@@ -49,6 +49,164 @@ def init_pinecone():
             return None
     return None
 
+# Test function for debugging - MOVED HERE
+def test_search_function(query):
+    try:
+        pc = Pinecone(api_key=PINECONE_API_KEY)
+        index = pc.Index("finance-policy")
+        
+        # Get stats first
+        stats = index.describe_index_stats()
+        
+        # Get embedding for query
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        query_embedding = embeddings.embed_query(query)
+        
+        # Try searching each namespace
+        results_summary = []
+        
+        for namespace in stats.get('namespaces', {}):
+            if namespace:
+                try:
+                    results = index.query(
+                        vector=query_embedding,
+                        top_k=3,
+                        include_metadata=True,
+                        include_values=False,
+                        namespace=namespace
+                    )
+                    
+                    results_summary.append(f"Namespace '{namespace}': {len(results['matches'])} matches")
+                    
+                    # Show first match details
+                    if results['matches']:
+                        first_match = results['matches'][0]
+                        results_summary.append(f"  - Score: {first_match['score']:.3f}")
+                        results_summary.append(f"  - Metadata keys: {list(first_match.get('metadata', {}).keys())}")
+                        
+                except Exception as e:
+                    results_summary.append(f"Namespace '{namespace}': Error - {str(e)}")
+        
+        # Also try default namespace
+        try:
+            results = index.query(
+                vector=query_embedding,
+                top_k=3,
+                include_metadata=True,
+                include_values=False
+            )
+            results_summary.append(f"Default namespace: {len(results['matches'])} matches")
+            
+        except Exception as e:
+            results_summary.append(f"Default namespace: Error - {str(e)}")
+        
+        return "\n".join(results_summary)
+            
+    except Exception as e:
+        return f"Error in test: {str(e)}"
+
+# SIMPLIFIED search function
+def get_relevant_context(query, k=3):
+    try:
+        if not PINECONE_API_KEY:
+            return None
+            
+        # Direct Pinecone query approach
+        pc = Pinecone(api_key=PINECONE_API_KEY)
+        index = pc.Index("finance-policy")
+        
+        # Get embedding for the query
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        query_embedding = embeddings.embed_query(query)
+        
+        # Search directly in Pinecone across all namespaces
+        all_results = []
+        
+        # Get stats to find namespaces
+        stats = index.describe_index_stats()
+        namespaces = list(stats.get('namespaces', {}).keys())
+        
+        # Search each namespace
+        for namespace in namespaces:
+            if namespace:  # Skip empty namespace
+                try:
+                    results = index.query(
+                        vector=query_embedding,
+                        top_k=k,
+                        include_metadata=True,
+                        include_values=False,
+                        namespace=namespace
+                    )
+                    
+                    for match in results['matches']:
+                        # Try different metadata field names
+                        text_content = (
+                            match['metadata'].get('text') or 
+                            match['metadata'].get('page_content') or
+                            match['metadata'].get('content') or
+                            str(match.get('metadata', {}))
+                        )
+                        
+                        all_results.append({
+                            'score': match['score'],
+                            'text': text_content,
+                            'source': match['metadata'].get('source_file', namespace),
+                            'page': match['metadata'].get('page', 'Unknown'),
+                            'metadata': match['metadata']  # Keep full metadata for debugging
+                        })
+                        
+                except Exception as e:
+                    continue
+        
+        if not all_results:
+            return ""
+        
+        # Sort by score (higher is better for Pinecone)
+        all_results.sort(key=lambda x: x['score'], reverse=True)
+        
+        # Take best results
+        best_results = all_results[:k]
+        
+        context_parts = []
+        for result in best_results:
+            if result['text'] and len(result['text']) > 50:  # Only include substantial text
+                context_parts.append(
+                    f"[Source: {result['source']}, Page: {result['page']}, Score: {result['score']:.3f}]\n{result['text']}\n"
+                )
+        
+        return "\n---\n".join(context_parts) if context_parts else ""
+        
+    except Exception as e:
+        if is_admin():
+            st.error(f"Search error: {str(e)}")
+        return None
+
+# Function to generate response
+def generate_response(query, context):
+    try:
+        model = genai.GenerativeModel('gemini-pro')
+        
+        prompt = f"""You are a helpful assistant for finance department employees. Answer questions about company finance policies based on the provided context.
+
+Context from company policies:
+{context}
+
+User Question: {query}
+
+Instructions:
+- Answer based on the provided context from the policy documents
+- Be specific and cite the source document when possible
+- If the answer isn't in the context, say so politely
+- Be concise but thorough
+- Include relevant policy references when available
+
+Answer:"""
+
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Sorry, I encountered an error: {str(e)}"
+
 # Admin Panel
 if is_admin():
     with st.sidebar:
@@ -88,7 +246,7 @@ if is_admin():
                 if st.button("Test Search Function"):
                     st.write("Testing search with query: 'reimbursement'")
                     test_result = test_search_function("reimbursement")
-                    st.write(f"Test result: {test_result}")
+                    st.code(test_result)
                 
             except Exception as e:
                 st.error(f"Error fetching stats: {str(e)}")
@@ -193,145 +351,6 @@ if "messages" not in st.session_state:
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-
-# Test function for debugging
-def test_search_function(query):
-    try:
-        pc = Pinecone(api_key=PINECONE_API_KEY)
-        index = pc.Index("finance-policy")
-        
-        # Get embedding for query
-        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-        query_embedding = embeddings.embed_query(query)
-        
-        # Try direct Pinecone query first
-        results = index.query(
-            vector=query_embedding,
-            top_k=3,
-            include_metadata=True,
-            include_values=False
-        )
-        
-        if results['matches']:
-            return f"Found {len(results['matches'])} matches using direct query"
-        else:
-            return "No matches found with direct query"
-            
-    except Exception as e:
-        return f"Error in test: {str(e)}"
-
-# SIMPLIFIED search function
-def get_relevant_context(query, k=3):
-    try:
-        if not PINECONE_API_KEY:
-            return None
-            
-        # Direct Pinecone query approach
-        pc = Pinecone(api_key=PINECONE_API_KEY)
-        index = pc.Index("finance-policy")
-        
-        # Get embedding for the query
-        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-        query_embedding = embeddings.embed_query(query)
-        
-        # Search directly in Pinecone across all namespaces
-        all_results = []
-        
-        # Get stats to find namespaces
-        stats = index.describe_index_stats()
-        namespaces = list(stats.get('namespaces', {}).keys())
-        
-        # Search each namespace
-        for namespace in namespaces:
-            if namespace:  # Skip empty namespace
-                try:
-                    results = index.query(
-                        vector=query_embedding,
-                        top_k=k,
-                        include_metadata=True,
-                        include_values=False,
-                        namespace=namespace
-                    )
-                    
-                    for match in results['matches']:
-                        all_results.append({
-                            'score': match['score'],
-                            'text': match['metadata'].get('text', ''),
-                            'source': match['metadata'].get('source_file', namespace),
-                            'page': match['metadata'].get('page', 'Unknown')
-                        })
-                        
-                except Exception as e:
-                    continue
-        
-        # Also try without namespace (default namespace)
-        try:
-            results = index.query(
-                vector=query_embedding,
-                top_k=k,
-                include_metadata=True,
-                include_values=False
-            )
-            
-            for match in results['matches']:
-                all_results.append({
-                    'score': match['score'],
-                    'text': match['metadata'].get('text', ''),
-                    'source': match['metadata'].get('source_file', 'Policy Document'),
-                    'page': match['metadata'].get('page', 'Unknown')
-                })
-                
-        except Exception as e:
-            pass
-        
-        if not all_results:
-            return ""
-        
-        # Sort by score (higher is better for Pinecone)
-        all_results.sort(key=lambda x: x['score'], reverse=True)
-        
-        # Take best results
-        best_results = all_results[:k]
-        
-        context_parts = []
-        for result in best_results:
-            if result['text']:  # Only include if we have text
-                context_parts.append(
-                    f"[Source: {result['source']}, Page: {result['page']}, Score: {result['score']:.3f}]\n{result['text']}\n"
-                )
-        
-        return "\n---\n".join(context_parts) if context_parts else ""
-        
-    except Exception as e:
-        if is_admin():
-            st.error(f"Search error: {str(e)}")
-        return None
-
-# Function to generate response
-def generate_response(query, context):
-    try:
-        model = genai.GenerativeModel('gemini-pro')
-        
-        prompt = f"""You are a helpful assistant for finance department employees. Answer questions about company finance policies based on the provided context.
-
-Context from company policies:
-{context}
-
-User Question: {query}
-
-Instructions:
-- Answer based on the provided context from the policy documents
-- Be specific and cite the source document when possible
-- If the answer isn't in the context, say so politely
-- Be concise but thorough
-- Include relevant policy references when available
-
-Answer:"""
-
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"Sorry, I encountered an error: {str(e)}"
 
 # Check system configuration
 if not GOOGLE_API_KEY or not PINECONE_API_KEY:
