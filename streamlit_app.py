@@ -207,6 +207,46 @@ Answer:"""
     except Exception as e:
         return f"Sorry, I encountered an error: {str(e)}"
 
+# Enhanced PDF text extraction function
+def extract_and_validate_text(documents, uploaded_file_name):
+    """Extract and validate text from PDF documents"""
+    
+    # Check if documents have content
+    total_text = ""
+    page_texts = []
+    
+    for i, doc in enumerate(documents):
+        page_text = doc.page_content.strip()
+        page_texts.append(page_text)
+        total_text += page_text + " "
+        
+        # Show sample from first few pages
+        if i < 3 and page_text:
+            st.write(f"📄 Page {i+1} sample: {page_text[:200]}...")
+        elif i < 3:
+            st.write(f"📄 Page {i+1}: No text found")
+    
+    # Analyze text content
+    text_length = len(total_text.strip())
+    word_count = len(total_text.split())
+    
+    st.write(f"📊 Text analysis:")
+    st.write(f"   - Total characters: {text_length:,}")
+    st.write(f"   - Total words: {word_count:,}")
+    st.write(f"   - Average per page: {word_count/len(documents):.1f} words")
+    
+    # Check if this looks like a scanned document
+    if text_length < 100:
+        st.error("❌ Very little text found. This might be a scanned/image-based PDF.")
+        st.info("💡 Try using an OCR tool to convert the PDF to text first, or use a different PDF.")
+        return False, []
+    
+    if word_count < 50:
+        st.warning("⚠️ Very few words found. The PDF might have formatting issues.")
+        return False, []
+    
+    return True, documents
+
 # Admin Panel
 if is_admin():
     with st.sidebar:
@@ -265,7 +305,7 @@ if is_admin():
             except Exception as e:
                 st.error(f"Error fetching stats: {str(e)}")
         
-        # PDF upload section with improved handling
+        # PDF upload section with enhanced text extraction
         st.subheader("Upload Policy Documents")
         
         # Show current usage
@@ -313,40 +353,63 @@ if is_admin():
                     st.write(f"📄 Loaded {len(documents)} pages from PDF")
                     
                     if len(documents) == 0:
-                        st.error("❌ No content found in PDF. Please check if the PDF is valid.")
+                        st.error("❌ No pages found in PDF. Please check if the PDF is valid.")
+                        os.unlink(tmp_file_path)
+                        st.stop()
+                    
+                    # Step 2.5: Validate text content - NEW STEP
+                    status_text.text("🔍 Validating text content...")
+                    progress_bar.progress(25)
+                    
+                    has_valid_text, validated_docs = extract_and_validate_text(documents, uploaded_file.name)
+                    
+                    if not has_valid_text:
+                        st.error("❌ Cannot process PDF: Insufficient text content")
                         os.unlink(tmp_file_path)
                         st.stop()
                     
                     # Step 3: Add metadata
                     status_text.text("🏷️ Adding metadata...")
-                    progress_bar.progress(30)
+                    progress_bar.progress(35)
                     
-                    for i, doc in enumerate(documents):
+                    for i, doc in enumerate(validated_docs):
                         doc.metadata.update({
                             'source_file': uploaded_file.name,
                             'page': i + 1,
                             'upload_date': datetime.now().isoformat(),
-                            'total_pages': len(documents)
+                            'total_pages': len(validated_docs)
                         })
                     
-                    # Step 4: Split documents
+                    # Step 4: Split documents with more aggressive settings
                     status_text.text("✂️ Splitting into chunks...")
-                    progress_bar.progress(40)
+                    progress_bar.progress(45)
                     
+                    # Use more aggressive text splitting
                     text_splitter = RecursiveCharacterTextSplitter(
-                        chunk_size=1000,
-                        chunk_overlap=200,
-                        length_function=len
+                        chunk_size=800,  # Smaller chunks
+                        chunk_overlap=100,  # Less overlap
+                        length_function=len,
+                        separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
                     )
-                    chunks = text_splitter.split_documents(documents)
                     
-                    st.write(f"✂️ Split into {len(chunks)} chunks")
+                    chunks = text_splitter.split_documents(validated_docs)
+                    
+                    # Filter out very short chunks
+                    valid_chunks = [chunk for chunk in chunks if len(chunk.page_content.strip()) > 20]
+                    
+                    st.write(f"✂️ Split into {len(chunks)} total chunks")
+                    st.write(f"✅ Keeping {len(valid_chunks)} chunks with sufficient content")
+                    
+                    if len(valid_chunks) == 0:
+                        st.error("❌ No valid chunks created. Text might be too short or fragmented.")
+                        os.unlink(tmp_file_path)
+                        st.stop()
                     
                     # Step 5: Check limits
                     status_text.text("🔍 Checking vector limits...")
-                    progress_bar.progress(50)
+                    progress_bar.progress(55)
                     
-                    new_total = stats['total_vector_count'] + len(chunks)
+                    new_total = stats['total_vector_count'] + len(valid_chunks)
                     if new_total > 100000:
                         st.error(f"❌ Cannot upload: Would exceed free tier limit ({new_total:,}/100,000 vectors)")
                         st.info(f"💡 Try reducing chunk size or removing old documents first")
@@ -355,7 +418,7 @@ if is_admin():
                     
                     # Step 6: Create embeddings
                     status_text.text("🧠 Creating embeddings...")
-                    progress_bar.progress(60)
+                    progress_bar.progress(65)
                     
                     embeddings = HuggingFaceEmbeddings(
                         model_name="sentence-transformers/all-MiniLM-L6-v2"
@@ -363,13 +426,13 @@ if is_admin():
                     
                     # Step 7: Upload to Pinecone
                     status_text.text("📤 Uploading to vector database...")
-                    progress_bar.progress(70)
+                    progress_bar.progress(75)
                     
                     namespace = proposed_namespace
-                    st.write(f"📤 Uploading to namespace: {namespace}")
+                    st.write(f"📤 Uploading {len(valid_chunks)} chunks to namespace: {namespace}")
                     
                     vectorstore = PineconeVectorStore.from_documents(
-                        documents=chunks,
+                        documents=valid_chunks,  # Use filtered chunks
                         embedding=embeddings,
                         index_name="finance-policy",
                         namespace=namespace
@@ -380,7 +443,7 @@ if is_admin():
                     progress_bar.progress(90)
                     
                     # Wait for Pinecone to update
-                    time.sleep(3)
+                    time.sleep(5)  # Longer wait
                     
                     # Clear cache and get fresh stats
                     st.cache_resource.clear()
@@ -395,7 +458,7 @@ if is_admin():
                     
                     if new_count > stats['total_vector_count']:
                         st.success(f"✅ Successfully processed {uploaded_file.name}")
-                        st.info(f"📊 Added {len(chunks)} chunks ({stats['total_vector_count']:,} → {new_count:,} total)")
+                        st.info(f"📊 Added {len(valid_chunks)} chunks ({stats['total_vector_count']:,} → {new_count:,} total)")
                         
                         # Clean up
                         os.unlink(tmp_file_path)
@@ -407,8 +470,8 @@ if is_admin():
                         st.rerun()
                     else:
                         st.error("❌ Upload verification failed - vector count didn't increase")
-                        st.write(f"Expected: {stats['total_vector_count'] + len(chunks):,}, Got: {new_count:,}")
-                        st.info("💡 This might be a temporary delay. Try refreshing the page in a few seconds.")
+                        st.write(f"Expected: {stats['total_vector_count'] + len(valid_chunks):,}, Got: {new_count:,}")
+                        st.info("💡 This might be a temporary delay. Try refreshing the page in a few minutes.")
                 
                 except Exception as e:
                     st.error(f"❌ Error processing PDF: {str(e)}")
