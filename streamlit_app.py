@@ -174,7 +174,7 @@ def get_relevant_context(query, k=3):
 # Function to generate response
 def generate_response(query, context):
     try:
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         chat_history = "\n".join([
             f"{msg['role'].upper()}: {msg['content']}" 
