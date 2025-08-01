@@ -340,7 +340,7 @@ def detect_language(text):
 # KEEP YOUR EXISTING generate_response FUNCTION
 def generate_response(query, context):
     try:
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         chat_history = "\n".join([
             f"{msg['role'].upper()}: {msg['content']}" 
