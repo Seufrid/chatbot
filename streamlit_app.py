@@ -97,6 +97,10 @@ def split_documents_with_policy_info(documents):
         text.metadata['chunk_index'] = idx
         text.metadata['text'] = text.page_content
         
+        # Fix page number offset (add 1 to convert from 0-based to 1-based)
+        if 'page' in text.metadata:
+            text.metadata['page'] = text.metadata['page'] + 1
+        
         # FIXED: Only add metadata fields if they have values (not empty strings)
         if policy_info["policy_number"]:
             text.metadata['policy_number'] = policy_info["policy_number"]
@@ -220,7 +224,7 @@ def test_search_function(query):
     except Exception as e:
         return f"Error in test: {str(e)}"
 
-# FIXED FUNCTION: Search function with proper metadata handling
+# FIXED FUNCTION: Search function with better citation handling
 def get_relevant_context(query, k=8):
     try:
         if not PINECONE_API_KEY:
@@ -254,7 +258,7 @@ def get_relevant_context(query, k=8):
                             # Build citation info with safe metadata access
                             citation_parts = []
                             
-                            # FIXED: Safe access to metadata fields
+                            # Prioritize policy and section info
                             policy_number = match['metadata'].get('policy_number', '')
                             if policy_number:
                                 citation_parts.append(f"Policy {policy_number}")
@@ -263,10 +267,13 @@ def get_relevant_context(query, k=8):
                             if section:
                                 citation_parts.append(f"Section {section}")
                             
-                            # If no policy info found, fallback to page
+                            # Only use page as last resort with a disclaimer
                             if not citation_parts:
                                 page = match['metadata'].get('page', 'Unknown')
-                                citation_parts.append(f"Page {page}")
+                                if page != 'Unknown':
+                                    citation_parts.append(f"Reference location")
+                                else:
+                                    citation_parts.append("Document section")
                             
                             citation_info = ", ".join(citation_parts) if citation_parts else "Document"
                             
@@ -299,7 +306,7 @@ def get_relevant_context(query, k=8):
             st.error(f"Search error: {str(e)}")
         return None
 
-# Generate response function (unchanged)
+# FIXED FUNCTION: Generate response without page citations
 def generate_response(query, context):
     try:
         model = genai.GenerativeModel('gemini-2.0-flash')
@@ -324,7 +331,7 @@ Instructions for providing high-quality answers:
 2. Include ALL relevant information from the context - don't summarize too briefly
 3. For "how to" or "what do I need" questions, provide step-by-step instructions
 4. Always cite the specific source document and policy/section information in parentheses (e.g., Financial Policies And Procedures, Policy 3.2.1 or Financial Policies And Procedures, Section 4.5)
-5. When citing, prioritize policy numbers and sections over page numbers
+5. DO NOT cite page numbers as they may not align with the PDF viewer. Only cite policy numbers and sections.
 6. If there are deadlines, requirements, or important conditions, highlight them clearly
 7. For claims or reimbursement questions, include:
    - Required documents
