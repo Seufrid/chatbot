@@ -24,13 +24,13 @@ st.set_page_config(
 if "policy_display_names" not in st.session_state:
     st.session_state.policy_display_names = {}
 
-# NEW FUNCTION: Extract policy number and section from text
+# FIXED FUNCTION: Extract policy number and section from text
 def extract_policy_info(text):
     """
     Extract policy number and section from the text content.
     This function looks for common patterns in policy documents.
     """
-    policy_info = {"policy_number": None, "section": None}
+    policy_info = {"policy_number": "", "section": ""}  # Changed from None to empty strings
     
     # Common patterns for policy numbers
     policy_patterns = [
@@ -77,7 +77,7 @@ def extract_policy_info(text):
     
     return policy_info
 
-# MODIFIED FUNCTION: Enhanced text splitter with policy info extraction
+# FIXED FUNCTION: Enhanced text splitter with proper metadata handling
 def split_documents_with_policy_info(documents):
     """
     Split documents and extract policy information for each chunk
@@ -95,9 +95,14 @@ def split_documents_with_policy_info(documents):
     for idx, text in enumerate(texts):
         policy_info = extract_policy_info(text.page_content)
         text.metadata['chunk_index'] = idx
-        text.metadata['policy_number'] = policy_info["policy_number"]
-        text.metadata['section'] = policy_info["section"]
         text.metadata['text'] = text.page_content
+        
+        # FIXED: Only add metadata fields if they have values (not empty strings)
+        if policy_info["policy_number"]:
+            text.metadata['policy_number'] = policy_info["policy_number"]
+        
+        if policy_info["section"]:
+            text.metadata['section'] = policy_info["section"]
     
     return texts
 
@@ -215,7 +220,7 @@ def test_search_function(query):
     except Exception as e:
         return f"Error in test: {str(e)}"
 
-# MODIFIED FUNCTION: Search function with improved citation info
+# FIXED FUNCTION: Search function with proper metadata handling
 def get_relevant_context(query, k=8):
     try:
         if not PINECONE_API_KEY:
@@ -246,16 +251,15 @@ def get_relevant_context(query, k=8):
                         text_content = match['metadata'].get('text', '')
                         
                         if text_content and len(text_content.strip()) > 20:
-                            # Build citation info
+                            # Build citation info with safe metadata access
                             citation_parts = []
                             
-                            # Add policy number if available
-                            policy_number = match['metadata'].get('policy_number')
+                            # FIXED: Safe access to metadata fields
+                            policy_number = match['metadata'].get('policy_number', '')
                             if policy_number:
                                 citation_parts.append(f"Policy {policy_number}")
                             
-                            # Add section if available
-                            section = match['metadata'].get('section')
+                            section = match['metadata'].get('section', '')
                             if section:
                                 citation_parts.append(f"Section {section}")
                             
@@ -264,7 +268,7 @@ def get_relevant_context(query, k=8):
                                 page = match['metadata'].get('page', 'Unknown')
                                 citation_parts.append(f"Page {page}")
                             
-                            citation_info = ", ".join(citation_parts)
+                            citation_info = ", ".join(citation_parts) if citation_parts else "Document"
                             
                             all_results.append({
                                 'score': match['score'],
@@ -295,7 +299,7 @@ def get_relevant_context(query, k=8):
             st.error(f"Search error: {str(e)}")
         return None
 
-# MODIFIED FUNCTION: Generate response with improved citation format
+# Generate response function (unchanged)
 def generate_response(query, context):
     try:
         model = genai.GenerativeModel('gemini-2.0-flash')
@@ -441,7 +445,7 @@ if is_admin():
             st.subheader("Upload Policy Documents")
             
             # Show available space
-            if pc and stats:
+            if pc and 'stats' in locals():
                 remaining = 100000 - stats['total_vector_count']
                 st.info(f"📊 Available space: ~{remaining//1000}k vectors")
             
@@ -543,91 +547,109 @@ if is_admin():
                             status_text.empty()
         
         with tab2:
-            if stats and stats.get('namespaces'):
-                st.subheader("Delete Documents")
-                
-                # Document selection
-                doc_to_delete = st.selectbox(
-                    "Select document",
-                    [ns for ns in stats['namespaces'].keys() if ns],
-                    format_func=lambda x: get_display_name(x)
-                )
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    confirm_delete = st.checkbox("Confirm deletion")
-                with col2:
-                    if st.button("Delete", type="secondary", disabled=not confirm_delete):
-                        try:
-                            with st.spinner("Deleting..."):
-                                index.delete(namespace=doc_to_delete, delete_all=True)
-                                # Also remove from display names if exists
-                                if doc_to_delete in st.session_state.policy_display_names:
-                                    del st.session_state.policy_display_names[doc_to_delete]
-                                st.success("✅ Deleted successfully")
-                                time.sleep(2)
-                                st.cache_resource.clear()
-                                st.rerun()
-                        except Exception as e:
-                            st.error(f"Error: {str(e)}")
-                
-                # Clear all section
-                st.markdown("---")
-                st.subheader("⚠️ Clear All Documents")
-                confirm_all = st.checkbox("I understand this will delete ALL data permanently")
-                if st.button("🗑️ CLEAR ALL", type="secondary", disabled=not confirm_all):
-                    try:
-                        with st.spinner("Clearing all..."):
-                            index.delete(delete_all=True)
-                            st.session_state.policy_display_names = {}
-                            st.success("✅ All documents cleared!")
-                            time.sleep(2)
-                            st.cache_resource.clear()
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
+            if pc:
+                try:
+                    index = pc.Index("finance-policy")
+                    stats = index.describe_index_stats()
+                    
+                    if stats and stats.get('namespaces'):
+                        st.subheader("Delete Documents")
+                        
+                        # Document selection
+                        doc_to_delete = st.selectbox(
+                            "Select document",
+                            [ns for ns in stats['namespaces'].keys() if ns],
+                            format_func=lambda x: get_display_name(x)
+                        )
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            confirm_delete = st.checkbox("Confirm deletion")
+                        with col2:
+                            if st.button("Delete", type="secondary", disabled=not confirm_delete):
+                                try:
+                                    with st.spinner("Deleting..."):
+                                        index.delete(namespace=doc_to_delete, delete_all=True)
+                                        # Also remove from display names if exists
+                                        if doc_to_delete in st.session_state.policy_display_names:
+                                            del st.session_state.policy_display_names[doc_to_delete]
+                                        st.success("✅ Deleted successfully")
+                                        time.sleep(2)
+                                        st.cache_resource.clear()
+                                        st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {str(e)}")
+                        
+                        # Clear all section
+                        st.markdown("---")
+                        st.subheader("⚠️ Clear All Documents")
+                        confirm_all = st.checkbox("I understand this will delete ALL data permanently")
+                        if st.button("🗑️ CLEAR ALL", type="secondary", disabled=not confirm_all):
+                            try:
+                                with st.spinner("Clearing all..."):
+                                    index.delete(delete_all=True)
+                                    st.session_state.policy_display_names = {}
+                                    st.success("✅ All documents cleared!")
+                                    time.sleep(2)
+                                    st.cache_resource.clear()
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {str(e)}")
+                    else:
+                        st.info("No documents uploaded yet")
+                except Exception as e:
+                    st.error(f"Error accessing database: {str(e)}")
             else:
-                st.info("No documents uploaded yet")
+                st.error("Database connection failed")
         
         with tab3:
             st.subheader("Edit Policy Display Names")
             st.info("Customize how policy names appear to users")
             
-            if stats and stats.get('namespaces'):
-                # Create a form for editing names
-                with st.form("edit_policy_names"):
-                    st.markdown("**Current Policies:**")
+            if pc:
+                try:
+                    index = pc.Index("finance-policy")
+                    stats = index.describe_index_stats()
                     
-                    for ns in sorted(stats['namespaces'].keys()):
-                        if ns:
-                            col1, col2 = st.columns([1, 2])
-                            with col1:
-                                st.text(f"Namespace: {ns}")
-                            with col2:
-                                current_name = get_display_name(ns)
-                                new_name = st.text_input(
-                                    f"Display name for {ns}",
-                                    value=current_name,
-                                    key=f"name_{ns}"
-                                )
-                                # Store the new name in session state
-                                if new_name and new_name != ns.replace('_', ' ').title():
-                                    st.session_state.policy_display_names[ns] = new_name
-                    
-                    if st.form_submit_button("Save Names", type="primary"):
-                        save_policy_names()
-                        st.success("✅ Policy names updated!")
-                        time.sleep(1)
-                        st.rerun()
-                
-                # Show preview
-                st.markdown("---")
-                st.markdown("**Preview (as users will see):**")
-                for ns in sorted(stats['namespaces'].keys()):
-                    if ns:
-                        st.markdown(f"• {get_display_name(ns)}")
+                    if stats and stats.get('namespaces'):
+                        # Create a form for editing names
+                        with st.form("edit_policy_names"):
+                            st.markdown("**Current Policies:**")
+                            
+                            for ns in sorted(stats['namespaces'].keys()):
+                                if ns:
+                                    col1, col2 = st.columns([1, 2])
+                                    with col1:
+                                        st.text(f"Namespace: {ns}")
+                                    with col2:
+                                        current_name = get_display_name(ns)
+                                        new_name = st.text_input(
+                                            f"Display name for {ns}",
+                                            value=current_name,
+                                            key=f"name_{ns}"
+                                        )
+                                        # Store the new name in session state
+                                        if new_name and new_name != ns.replace('_', ' ').title():
+                                            st.session_state.policy_display_names[ns] = new_name
+                            
+                            if st.form_submit_button("Save Names", type="primary"):
+                                save_policy_names()
+                                st.success("✅ Policy names updated!")
+                                time.sleep(1)
+                                st.rerun()
+                        
+                        # Show preview
+                        st.markdown("---")
+                        st.markdown("**Preview (as users will see):**")
+                        for ns in sorted(stats['namespaces'].keys()):
+                            if ns:
+                                st.markdown(f"• {get_display_name(ns)}")
+                    else:
+                        st.info("No policies uploaded yet")
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
             else:
-                st.info("No policies uploaded yet")
+                st.error("Database connection failed")
         
         # Chat Preview Section
         st.markdown("---")
