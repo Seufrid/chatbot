@@ -190,7 +190,7 @@ def test_search_function(query):
         index = pc.Index("finance-policy")
         
         stats = index.describe_index_stats()
-        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
         query_embedding = embeddings.embed_query(query)
         
         results_summary = []
@@ -233,7 +233,7 @@ def get_relevant_context(query, k=8):
         pc = Pinecone(api_key=PINECONE_API_KEY)
         index = pc.Index("finance-policy")
         
-        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
         query_embedding = embeddings.embed_query(query)
         
         all_results = []
@@ -584,7 +584,7 @@ if is_admin():
                                 # Step 7: Create embeddings
                                 status_text.text("🧮 Creating embeddings...")
                                 progress_bar.progress(65)
-                                embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+                                embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
                                 
                                 # Step 8: Upload to Pinecone
                                 status_text.text("☁️ Uploading to database...")
