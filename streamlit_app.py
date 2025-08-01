@@ -306,17 +306,95 @@ def get_relevant_context(query, k=8):
             st.error(f"Search error: {str(e)}")
         return None
 
-# FIXED FUNCTION: Generate response without page citations
+# NEW FUNCTION: Detect language
+def detect_language(text):
+    """
+    Simple language detection based on common words
+    Returns 'ms' for Malay, 'en' for English
+    """
+    malay_indicators = [
+        'ada', 'adalah', 'tak', 'tidak', 'apa', 'apakah', 'bila', 'bilakah',
+        'mana', 'manakah', 'siapa', 'siapakah', 'macam', 'macamana',
+        'bagaimana', 'bagaimanakah', 'berapa', 'berapakah', 'untuk',
+        'boleh', 'bolehkah', 'ya', 'saya', 'kami', 'kita', 'mereka',
+        'dengan', 'dalam', 'dari', 'daripada', 'kepada', 'pada',
+        'yang', 'dan', 'atau', 'tetapi', 'jika', 'kalau', 'kerana',
+        'sebab', 'jadi', 'maka', 'ni', 'tu', 'nak', 'dah', 'lah',
+        'kah', 'kan', 'pun', 'policy', 'polisi', 'reimbursement',
+        'pembayaran', 'balik', 'tuntutan', 'bayar', 'bayaran',
+        'dokumen', 'borang', 'permohonan', 'kelulusan', 'tarikh',
+        'tempoh', 'proses', 'prosedur', 'syarat', 'keperluan'
+    ]
+    
+    text_lower = text.lower()
+    malay_count = sum(1 for word in malay_indicators if word in text_lower)
+    
+    # If more than 2 Malay words found, consider it Malay
+    return 'ms' if malay_count > 2 else 'en'
+
+# ENHANCED FUNCTION: Generate response with better bilingual support
 def generate_response(query, context):
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
         
         chat_history = "\n".join([
             f"{msg['role'].upper()}: {msg['content']}" 
             for msg in st.session_state.messages[-10:]
         ])
         
-        prompt = f"""You are a helpful assistant for finance department employees. Answer questions about company finance policies based on the provided context.
+        # Detect language
+        detected_lang = detect_language(query)
+        lang_name = "Bahasa Malaysia" if detected_lang == 'ms' else "English"
+        
+        # Add language-specific examples based on detection
+        if detected_lang == 'ms':
+            example_section = """
+Contoh respons yang baik dalam BAHASA MALAYSIA:
+"Untuk membuat tuntutan perbelanjaan, berikut adalah prosedurnya:
+
+1. **Dokumen yang Diperlukan:**
+   - Resit atau bil asal (Financial Policies And Procedures, Policy 4.1.2, Section 4.1.2)
+   - Borang tuntutan petty cash (Financial Policies And Procedures, Policy 4.1.2, Section 4.1.2)
+   - Pengesahan dari Pegawai Kumpulan A (Financial Policies And Procedures, Policy 4.1.2, Section 4.1.2)
+
+2. **Had Tuntutan:**
+   - Semua perbelanjaan sehingga RM500.00 yang tidak termasuk dalam kontrak pusat (Financial Policies And Procedures, Policy 4.1.2, Section 4.1.2)
+   - Tuntutan perubatan dari klinik panel tidak melebihi RM200.00 (Financial Policies And Procedures, Policy 4.1.2, Section 4.1.2)
+
+3. **Proses Penghantaran:**
+   - Hantar borang tuntutan petty cash kepada staf berkenaan
+   - Lampirkan semua dokumen sokongan
+   - Dapatkan pengesahan dari pihak berwajib
+
+4. **Nota Penting:**
+   - Pembayaran balik boleh dibuat selepas penggunaan 50% dana
+   - Laporan petty cash mesti dihantar ke unit pembayaran untuk proses pembayaran balik"
+"""
+        else:
+            example_section = """
+Example of a comprehensive response in ENGLISH:
+"To claim your expenses, here's the complete process:
+
+1. **Required Documents:**
+   - Original receipts or bills (Financial Policies And Procedures, Policy 4.1.2, Section 4.1.2)
+   - Petty cash claim form (Financial Policies And Procedures, Policy 4.1.2, Section 4.1.2)
+   - Certification from Group A Officer (Financial Policies And Procedures, Policy 4.1.2, Section 4.1.2)
+
+2. **Claim Limits:**
+   - All expenses up to RM500.00 not included in central contracts (Financial Policies And Procedures, Policy 4.1.2, Section 4.1.2)
+   - Medical claims from panel clinics not exceeding RM200.00 (Financial Policies And Procedures, Policy 4.1.2, Section 4.1.2)
+
+3. **Submission Process:**
+   - Submit the petty cash claim form to relevant staff
+   - Attach all supporting documents
+   - Get certification from authorized personnel
+
+4. **Important Notes:**
+   - Reimbursement can be made after 50% fund utilization
+   - Petty cash report must be sent to payment unit for reimbursement"
+"""
+        
+        prompt = f"""You are a helpful bilingual assistant for finance department employees who can respond fluently in both English and Bahasa Malaysia.
 
 Context from company policies:
 {context}
@@ -326,31 +404,23 @@ Recent conversation:
 
 User Question: {query}
 
-Instructions for providing high-quality answers:
-1. ALWAYS structure your response clearly using numbered points or bullet points when explaining procedures, requirements, or multiple items
-2. Include ALL relevant information from the context - don't summarize too briefly
-3. For "how to" or "what do I need" questions, provide step-by-step instructions
-4. Always cite the specific source document and policy/section information in parentheses (e.g., Financial Policies And Procedures, Policy 3.2.1 or Financial Policies And Procedures, Section 4.5)
-5. DO NOT cite page numbers as they may not align with the PDF viewer. Only cite policy numbers and sections.
-6. If there are deadlines, requirements, or important conditions, highlight them clearly
-7. For claims or reimbursement questions, include:
-   - Required documents
-   - Submission deadlines
-   - Processing timelines
-   - Approval requirements
-   - Any restrictions or conditions
-8. Respond in the same language as the question (English or Bahasa Malaysia)
-9. If you cannot find specific information in the context, say so politely and suggest what the user might look for
+CRITICAL INSTRUCTIONS:
+1. The user's question is in {lang_name}. You MUST respond in {lang_name}.
+2. Provide a COMPREHENSIVE and DETAILED response regardless of language.
+3. Do NOT give brief or summarized responses in Bahasa Malaysia - they should be as detailed as English responses.
+4. Always cite policies properly: (Financial Policies And Procedures, Policy X.X.X, Section X.X.X)
+5. Never cite page numbers, only policy and section numbers.
 
-Example of a good response format:
-"To claim your travel expenses, here's what you need to do:
+Response Structure Requirements:
+- Use clear numbered points or bullet points
+- Include ALL relevant information from the context
+- For procedures, provide complete step-by-step instructions
+- List all requirements, deadlines, and conditions
+- If information is not found, explain this clearly
 
-1. **Required Documents:** [List all documents with source citations including policy/section numbers]
-2. **Submission Deadline:** [Specify deadline with source citation]
-3. **Process:** [Explain the process with source citations]
-4. **Important Notes:** [Any additional requirements or restrictions]"
+{example_section}
 
-Answer:"""
+Now provide your response in {lang_name}:"""
 
         response = model.generate_content(prompt)
         return response.text
