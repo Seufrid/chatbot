@@ -10,33 +10,12 @@ import tempfile
 import time
 from datetime import datetime
 
-# Configure page with light theme
+# Configure page
 st.set_page_config(
     page_title="Finance Policy Assistant",
     page_icon="💼",
-    layout="wide",
-    initial_sidebar_state="expanded",
-    menu_items=None
+    layout="wide"
 )
-
-# Force light theme
-st.markdown("""
-<style>
-    [data-testid="stAppViewContainer"] {
-        background-color: white;
-    }
-    [data-testid="stSidebar"] {
-        background-color: #f0f2f6;
-    }
-    /* Center the footer */
-    .footer {
-        text-align: center;
-        font-style: italic;
-        color: #666;
-        margin-top: 50px;
-    }
-</style>
-""", unsafe_allow_html=True)
 
 # Initialize session state for policy display names
 if 'policy_display_names' not in st.session_state:
@@ -603,11 +582,11 @@ else:
                 
                 if stats['total_vector_count'] > 0:
                     st.success(f"✅ System ready")
-                    # Removed the document chunks available line
+                    st.info(f"📊 {stats['total_vector_count']} document chunks available")
                     
                     # Show actually available documents with custom names
                     if stats.get('namespaces'):
-                        st.markdown("**Available policies:**")
+                        st.markdown("**Available documents:**")
                         for ns in stats['namespaces'].keys():
                             if ns:
                                 display_name = get_policy_display_name(ns)
@@ -675,6 +654,6 @@ Try rephrasing your question or asking about topics like:
     # Add assistant response
     st.session_state.messages.append({"role": "assistant", "content": response})
 
-# Footer with centered text
+# Footer
 st.markdown("---")
-st.markdown('<p class="footer">Finance Policy Assistant - Powered by AI</p>', unsafe_allow_html=True)
+st.markdown("*Finance Policy Assistant - Powered by AI*")
