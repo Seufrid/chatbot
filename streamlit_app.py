@@ -368,68 +368,68 @@ if is_admin():
                             
                             if not is_valid:
                                 st.error(f"❌ PDF Validation Failed: {validation_msg}")
-                                return
-                            
-                            st.info(f"✅ {validation_msg}")
-                            
-                            # Step 4: Split documents
-                            status_text.text("✂️ Splitting into chunks...")
-                            progress_bar.progress(45)
-                            text_splitter = RecursiveCharacterTextSplitter(
-                                chunk_size=1000,
-                                chunk_overlap=200,
-                                length_function=len,
-                                separators=["\n\n", "\n", " ", ""]
-                            )
-                            texts = text_splitter.split_documents(documents)
-                            
-                            # Step 5: Prepare metadata
-                            status_text.text("📋 Preparing metadata...")
-                            progress_bar.progress(55)
-                            for idx, text in enumerate(texts):
-                                text.metadata['chunk_index'] = idx
-                                text.metadata['source_file'] = uploaded_file.name
-                                text.metadata['upload_date'] = datetime.now().isoformat()
-                                text.metadata['text'] = text.page_content
-                            
-                            # Step 6: Generate namespace
-                            namespace = uploaded_file.name.replace('.pdf', '').replace(' ', '_').lower()
-                            
-                            # Step 7: Create embeddings
-                            status_text.text("🧮 Creating embeddings...")
-                            progress_bar.progress(65)
-                            embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-                            
-                            # Step 8: Upload to Pinecone
-                            status_text.text("☁️ Uploading to database...")
-                            progress_bar.progress(75)
-                            
-                            vector_store = PineconeVectorStore.from_documents(
-                                documents=texts,
-                                embedding=embeddings,
-                                index_name="finance-policy",
-                                namespace=namespace
-                            )
-                            
-                            # Step 9: Verify upload
-                            status_text.text("✅ Verifying upload...")
-                            progress_bar.progress(90)
-                            
-                            index = pc.Index("finance-policy")
-                            stats_after = index.describe_index_stats()
-                            new_count = stats_after['namespaces'].get(namespace, {}).get('vector_count', 0)
-                            
-                            progress_bar.progress(100)
-                            status_text.text("✅ Processing complete!")
-                            
-                            # Clean up
-                            os.unlink(tmp_file_path)
-                            
-                            st.success(f"✅ Successfully processed {uploaded_file.name}")
-                            st.info(f"📊 Added {new_count} chunks to the database")
-                            st.balloons()
-                            time.sleep(2)
-                            st.rerun()
+                                os.unlink(tmp_file_path)  # Clean up temp file
+                            else:
+                                st.info(f"✅ {validation_msg}")
+                                
+                                # Step 4: Split documents
+                                status_text.text("✂️ Splitting into chunks...")
+                                progress_bar.progress(45)
+                                text_splitter = RecursiveCharacterTextSplitter(
+                                    chunk_size=1000,
+                                    chunk_overlap=200,
+                                    length_function=len,
+                                    separators=["\n\n", "\n", " ", ""]
+                                )
+                                texts = text_splitter.split_documents(documents)
+                                
+                                # Step 5: Prepare metadata
+                                status_text.text("📋 Preparing metadata...")
+                                progress_bar.progress(55)
+                                for idx, text in enumerate(texts):
+                                    text.metadata['chunk_index'] = idx
+                                    text.metadata['source_file'] = uploaded_file.name
+                                    text.metadata['upload_date'] = datetime.now().isoformat()
+                                    text.metadata['text'] = text.page_content
+                                
+                                # Step 6: Generate namespace
+                                namespace = uploaded_file.name.replace('.pdf', '').replace(' ', '_').lower()
+                                
+                                # Step 7: Create embeddings
+                                status_text.text("🧮 Creating embeddings...")
+                                progress_bar.progress(65)
+                                embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+                                
+                                # Step 8: Upload to Pinecone
+                                status_text.text("☁️ Uploading to database...")
+                                progress_bar.progress(75)
+                                
+                                vector_store = PineconeVectorStore.from_documents(
+                                    documents=texts,
+                                    embedding=embeddings,
+                                    index_name="finance-policy",
+                                    namespace=namespace
+                                )
+                                
+                                # Step 9: Verify upload
+                                status_text.text("✅ Verifying upload...")
+                                progress_bar.progress(90)
+                                
+                                index = pc.Index("finance-policy")
+                                stats_after = index.describe_index_stats()
+                                new_count = stats_after['namespaces'].get(namespace, {}).get('vector_count', 0)
+                                
+                                progress_bar.progress(100)
+                                status_text.text("✅ Processing complete!")
+                                
+                                # Clean up
+                                os.unlink(tmp_file_path)
+                                
+                                st.success(f"✅ Successfully processed {uploaded_file.name}")
+                                st.info(f"📊 Added {new_count} chunks to the database")
+                                st.balloons()
+                                time.sleep(2)
+                                st.rerun()
                             
                         except Exception as e:
                             st.error(f"❌ Error: {str(e)}")
