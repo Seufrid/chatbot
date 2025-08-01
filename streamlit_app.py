@@ -335,7 +335,7 @@ def detect_language(text):
 # ENHANCED FUNCTION: Generate response with better bilingual support
 def generate_response(query, context):
     try:
-        model = genai.GenerativeModel('gemini-2.5-pro')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         chat_history = "\n".join([
             f"{msg['role'].upper()}: {msg['content']}" 
