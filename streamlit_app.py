@@ -621,22 +621,22 @@ else:
         st.error("⚠️ System not properly configured. Please contact IT support.")
         st.stop()
     
-    # Chat input
+    # Chat input - FIXED VERSION
     if prompt := st.chat_input("Ask about finance policies..."):
-        # Add user message
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        
-        # Generate response
-        with st.chat_message("assistant"):
-            with st.spinner("Searching policy documents..."):
-                context = get_relevant_context(prompt)
-                
-                if context is None:
-                    response = "I couldn't connect to the document database. Please try again or contact IT support."
-                elif context == "":
-                    response = f"""I couldn't find specific information about "{prompt}" in the policy documents. 
+        # Display user message immediately (but don't add to session state yet)
+        with chat_container:
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            
+            # Generate response
+            with st.chat_message("assistant"):
+                with st.spinner("Searching policy documents..."):
+                    context = get_relevant_context(prompt)
+                    
+                    if context is None:
+                        response = "I couldn't connect to the document database. Please try again or contact IT support."
+                    elif context == "":
+                        response = f"""I couldn't find specific information about "{prompt}" in the policy documents. 
 
 Please try:
 - Rephrasing your question
@@ -647,13 +647,17 @@ Please try:
   • Budget approval processes
   • Asset management
   • Financial reporting requirements"""
-                else:
-                    response = generate_response(prompt, context)
-                
-                st.markdown(response)
+                    else:
+                        response = generate_response(prompt, context)
+                    
+                    st.markdown(response)
         
-        # Add assistant response
+        # Only add messages to session state after everything is displayed
+        st.session_state.messages.append({"role": "user", "content": prompt})
         st.session_state.messages.append({"role": "assistant", "content": response})
+        
+        # Force a rerun to update the chat history
+        st.rerun()
     
     # Footer
     st.markdown("---")
