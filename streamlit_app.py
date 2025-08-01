@@ -10,6 +10,7 @@ import tempfile
 import time
 from datetime import datetime
 import json
+import re
 
 # Configure page
 st.set_page_config(
@@ -22,6 +23,83 @@ st.set_page_config(
 # Initialize session state for policy names
 if "policy_display_names" not in st.session_state:
     st.session_state.policy_display_names = {}
+
+# NEW FUNCTION: Extract policy number and section from text
+def extract_policy_info(text):
+    """
+    Extract policy number and section from the text content.
+    This function looks for common patterns in policy documents.
+    """
+    policy_info = {"policy_number": None, "section": None}
+    
+    # Common patterns for policy numbers
+    policy_patterns = [
+        r'Policy\s+(?:No\.?|Number\.?)\s*:?\s*([A-Z0-9\-\.]+)',
+        r'Policy\s+([A-Z0-9\-\.]+)',
+        r'Section\s+(\d+(?:\.\d+)*)',
+        r'Article\s+(\d+(?:\.\d+)*)',
+        r'Clause\s+(\d+(?:\.\d+)*)',
+        r'Item\s+(\d+(?:\.\d+)*)',
+        r'Part\s+([A-Z0-9\-\.]+)',
+        r'Chapter\s+(\d+(?:\.\d+)*)',
+        r'(\d+\.\d+\.\d+)',  # Pattern like 3.2.1
+        r'(\d+\.\d+)',       # Pattern like 3.2
+    ]
+    
+    # Section patterns
+    section_patterns = [
+        r'Section\s+(\d+(?:\.\d+)*(?:\.[A-Za-z])?)',
+        r'(\d+\.\d+\.\d+\.\d+)',  # Pattern like 3.2.1.4
+        r'(\d+\.\d+\.\d+)',       # Pattern like 3.2.1
+        r'(\d+\.\d+)',            # Pattern like 3.2
+        r'Article\s+(\d+(?:\.\d+)*)',
+        r'Subsection\s+(\d+(?:\.\d+)*)',
+    ]
+    
+    # Look for policy numbers
+    for pattern in policy_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            policy_info["policy_number"] = match.group(1)
+            break
+    
+    # Look for sections
+    for pattern in section_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        if matches:
+            # Take the first substantial match
+            for match in matches:
+                if len(match) >= 3:  # At least like "1.2"
+                    policy_info["section"] = match
+                    break
+            if policy_info["section"]:
+                break
+    
+    return policy_info
+
+# MODIFIED FUNCTION: Enhanced text splitter with policy info extraction
+def split_documents_with_policy_info(documents):
+    """
+    Split documents and extract policy information for each chunk
+    """
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200,
+        length_function=len,
+        separators=["\n\n", "\n", " ", ""]
+    )
+    
+    texts = text_splitter.split_documents(documents)
+    
+    # Extract policy info for each chunk
+    for idx, text in enumerate(texts):
+        policy_info = extract_policy_info(text.page_content)
+        text.metadata['chunk_index'] = idx
+        text.metadata['policy_number'] = policy_info["policy_number"]
+        text.metadata['section'] = policy_info["section"]
+        text.metadata['text'] = text.page_content
+    
+    return texts
 
 # Custom CSS to hide Streamlit elements for non-admin users
 def apply_custom_css():
@@ -137,8 +215,8 @@ def test_search_function(query):
     except Exception as e:
         return f"Error in test: {str(e)}"
 
-# Search function
-def get_relevant_context(query, k=8):  # Increased from 6 to 8 for more comprehensive context
+# MODIFIED FUNCTION: Search function with improved citation info
+def get_relevant_context(query, k=8):
     try:
         if not PINECONE_API_KEY:
             return None
@@ -168,11 +246,31 @@ def get_relevant_context(query, k=8):  # Increased from 6 to 8 for more comprehe
                         text_content = match['metadata'].get('text', '')
                         
                         if text_content and len(text_content.strip()) > 20:
+                            # Build citation info
+                            citation_parts = []
+                            
+                            # Add policy number if available
+                            policy_number = match['metadata'].get('policy_number')
+                            if policy_number:
+                                citation_parts.append(f"Policy {policy_number}")
+                            
+                            # Add section if available
+                            section = match['metadata'].get('section')
+                            if section:
+                                citation_parts.append(f"Section {section}")
+                            
+                            # If no policy info found, fallback to page
+                            if not citation_parts:
+                                page = match['metadata'].get('page', 'Unknown')
+                                citation_parts.append(f"Page {page}")
+                            
+                            citation_info = ", ".join(citation_parts)
+                            
                             all_results.append({
                                 'score': match['score'],
                                 'text': text_content,
                                 'source': get_display_name(namespace),
-                                'page': match['metadata'].get('page', 'Unknown')
+                                'citation_info': citation_info
                             })
                         
                 except Exception as e:
@@ -187,7 +285,7 @@ def get_relevant_context(query, k=8):  # Increased from 6 to 8 for more comprehe
         context_parts = []
         for result in best_results:
             context_parts.append(
-                f"[Source: {result['source']}, Page: {result['page']}, Relevance: {result['score']:.3f}]\n{result['text']}\n"
+                f"[Source: {result['source']}, {result['citation_info']}, Relevance: {result['score']:.3f}]\n{result['text']}\n"
             )
         
         return "\n---\n".join(context_parts)
@@ -197,7 +295,7 @@ def get_relevant_context(query, k=8):  # Increased from 6 to 8 for more comprehe
             st.error(f"Search error: {str(e)}")
         return None
 
-# Function to generate response
+# MODIFIED FUNCTION: Generate response with improved citation format
 def generate_response(query, context):
     try:
         model = genai.GenerativeModel('gemini-2.0-flash')
@@ -221,21 +319,22 @@ Instructions for providing high-quality answers:
 1. ALWAYS structure your response clearly using numbered points or bullet points when explaining procedures, requirements, or multiple items
 2. Include ALL relevant information from the context - don't summarize too briefly
 3. For "how to" or "what do I need" questions, provide step-by-step instructions
-4. Always cite the specific source document and page number in parentheses (e.g., Financial Policies And Procedures, Page 62.0)
-5. If there are deadlines, requirements, or important conditions, highlight them clearly
-6. For claims or reimbursement questions, include:
+4. Always cite the specific source document and policy/section information in parentheses (e.g., Financial Policies And Procedures, Policy 3.2.1 or Financial Policies And Procedures, Section 4.5)
+5. When citing, prioritize policy numbers and sections over page numbers
+6. If there are deadlines, requirements, or important conditions, highlight them clearly
+7. For claims or reimbursement questions, include:
    - Required documents
    - Submission deadlines
    - Processing timelines
    - Approval requirements
    - Any restrictions or conditions
-7. Respond in the same language as the question (English or Bahasa Malaysia)
-8. If you cannot find specific information in the context, say so politely and suggest what the user might look for
+8. Respond in the same language as the question (English or Bahasa Malaysia)
+9. If you cannot find specific information in the context, say so politely and suggest what the user might look for
 
 Example of a good response format:
 "To claim your travel expenses, here's what you need to do:
 
-1. **Required Documents:** [List all documents with source citations]
+1. **Required Documents:** [List all documents with source citations including policy/section numbers]
 2. **Submission Deadline:** [Specify deadline with source citation]
 3. **Process:** [Explain the process with source citations]
 4. **Important Notes:** [Any additional requirements or restrictions]"
@@ -386,25 +485,17 @@ if is_admin():
                             else:
                                 st.info(f"✅ {validation_msg}")
                                 
-                                # Step 4: Split documents
-                                status_text.text("✂️ Splitting into chunks...")
+                                # Step 4: Split documents with policy info extraction
+                                status_text.text("✂️ Splitting into chunks and extracting policy info...")
                                 progress_bar.progress(45)
-                                text_splitter = RecursiveCharacterTextSplitter(
-                                    chunk_size=1000,
-                                    chunk_overlap=200,
-                                    length_function=len,
-                                    separators=["\n\n", "\n", " ", ""]
-                                )
-                                texts = text_splitter.split_documents(documents)
+                                texts = split_documents_with_policy_info(documents)
                                 
                                 # Step 5: Prepare metadata
                                 status_text.text("📋 Preparing metadata...")
                                 progress_bar.progress(55)
                                 for idx, text in enumerate(texts):
-                                    text.metadata['chunk_index'] = idx
                                     text.metadata['source_file'] = uploaded_file.name
                                     text.metadata['upload_date'] = datetime.now().isoformat()
-                                    text.metadata['text'] = text.page_content
                                 
                                 # Step 6: Generate namespace
                                 namespace = uploaded_file.name.replace('.pdf', '').replace(' ', '_').lower()
