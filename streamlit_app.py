@@ -20,6 +20,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# MULTILINGUAL EMBEDDING MODEL
+EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
 # Initialize session state for policy names
 if "policy_display_names" not in st.session_state:
     st.session_state.policy_display_names = {}
@@ -190,7 +193,8 @@ def test_search_function(query):
         index = pc.Index("finance-policy")
         
         stats = index.describe_index_stats()
-        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+        # Use multilingual embeddings
+        embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
         query_embedding = embeddings.embed_query(query)
         
         results_summary = []
@@ -224,7 +228,7 @@ def test_search_function(query):
     except Exception as e:
         return f"Error in test: {str(e)}"
 
-# FIXED FUNCTION: Search function with better citation handling
+# FIXED FUNCTION: Search function with multilingual embeddings
 def get_relevant_context(query, k=8):
     try:
         if not PINECONE_API_KEY:
@@ -233,7 +237,8 @@ def get_relevant_context(query, k=8):
         pc = Pinecone(api_key=PINECONE_API_KEY)
         index = pc.Index("finance-policy")
         
-        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+        # Use multilingual embeddings
+        embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
         query_embedding = embeddings.embed_query(query)
         
         all_results = []
@@ -306,7 +311,7 @@ def get_relevant_context(query, k=8):
             st.error(f"Search error: {str(e)}")
         return None
 
-# NEW FUNCTION: Detect language
+# KEEP YOUR EXISTING detect_language FUNCTION
 def detect_language(text):
     """
     Simple language detection based on common words
@@ -332,10 +337,10 @@ def detect_language(text):
     # If more than 2 Malay words found, consider it Malay
     return 'ms' if malay_count > 2 else 'en'
 
-# ENHANCED FUNCTION: Generate response with better bilingual support
+# KEEP YOUR EXISTING generate_response FUNCTION
 def generate_response(query, context):
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
         
         chat_history = "\n".join([
             f"{msg['role'].upper()}: {msg['content']}" 
@@ -581,10 +586,10 @@ if is_admin():
                                 # Step 6: Generate namespace
                                 namespace = uploaded_file.name.replace('.pdf', '').replace(' ', '_').lower()
                                 
-                                # Step 7: Create embeddings
-                                status_text.text("🧮 Creating embeddings...")
+                                # Step 7: Create embeddings with MULTILINGUAL MODEL
+                                status_text.text("🧮 Creating multilingual embeddings...")
                                 progress_bar.progress(65)
-                                embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+                                embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
                                 
                                 # Step 8: Upload to Pinecone
                                 status_text.text("☁️ Uploading to database...")
@@ -657,16 +662,35 @@ if is_admin():
                                 except Exception as e:
                                     st.error(f"Error: {str(e)}")
                         
-                        # Clear all section
+                        # Clear all section - FIXED VERSION
                         st.markdown("---")
                         st.subheader("⚠️ Clear All Documents")
                         confirm_all = st.checkbox("I understand this will delete ALL data permanently")
                         if st.button("🗑️ CLEAR ALL", type="secondary", disabled=not confirm_all):
                             try:
                                 with st.spinner("Clearing all..."):
-                                    index.delete(delete_all=True)
+                                    # Delete each namespace individually
+                                    namespaces = list(stats.get('namespaces', {}).keys())
+                                    for ns in namespaces:
+                                        if ns:  # Only delete non-empty namespaces
+                                            try:
+                                                index.delete(namespace=ns, delete_all=True)
+                                            except Exception as e:
+                                                st.warning(f"Could not delete namespace {ns}: {str(e)}")
+                                    
+                                    # Clear display names
                                     st.session_state.policy_display_names = {}
-                                    st.success("✅ All documents cleared!")
+                                    
+                                    # Wait a moment for Pinecone to process
+                                    time.sleep(2)
+                                    
+                                    # Verify deletion
+                                    new_stats = index.describe_index_stats()
+                                    if new_stats['total_vector_count'] == 0:
+                                        st.success("✅ All documents cleared!")
+                                    else:
+                                        st.warning(f"⚠️ Some vectors remain: {new_stats['total_vector_count']}")
+                                    
                                     time.sleep(2)
                                     st.cache_resource.clear()
                                     st.rerun()
