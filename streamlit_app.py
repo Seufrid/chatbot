@@ -28,8 +28,7 @@ def apply_custom_css():
     if not is_admin():
         st.markdown("""
         <style>
-        /* Hide the hamburger menu and footer for regular users */
-        #MainMenu {visibility: hidden;}
+        /* Hide only the footer for regular users, keep the menu visible */
         footer {visibility: hidden;}
         .stDeployButton {display: none;}
         
