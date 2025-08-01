@@ -9,6 +9,7 @@ import os
 import tempfile
 import time
 from datetime import datetime
+import json
 
 # Configure page
 st.set_page_config(
@@ -18,127 +19,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Theme management functions
-def get_current_theme():
-    """Get the current theme from query params or session state"""
-    query_params = st.query_params
-    theme = query_params.get("theme", "light")
-    return theme
-
-def set_theme(theme):
-    """Set the theme in query params"""
-    st.query_params["theme"] = theme
-
-def apply_theme_css(theme):
-    """Apply CSS based on selected theme"""
-    if theme == "dark":
-        st.markdown("""
-        <style>
-        /* Dark theme */
-        .stApp {
-            background-color: #0e1117;
-            color: #fafafa;
-        }
-        
-        /* Chat messages */
-        .stChatMessage {
-            background-color: #262730;
-        }
-        
-        /* Sidebar */
-        section[data-testid="stSidebar"] {
-            background-color: #262730;
-        }
-        
-        /* Input fields */
-        .stTextInput > div > div > input {
-            background-color: #262730;
-            color: #fafafa;
-        }
-        
-        /* Buttons */
-        .stButton > button {
-            background-color: #262730;
-            color: #fafafa;
-            border: 1px solid #444;
-        }
-        
-        /* Theme switcher buttons */
-        .theme-btn-light {
-            background-color: #f0f2f6 !important;
-            color: #262730 !important;
-        }
-        .theme-btn-dark {
-            background-color: #262730 !important;
-            color: #fafafa !important;
-            border: 2px solid #4CAF50 !important;
-        }
-        .theme-btn-auto {
-            background-color: #1f77b4 !important;
-            color: #fafafa !important;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-    elif theme == "auto":
-        st.markdown("""
-        <style>
-        /* Auto theme - uses system preference */
-        @media (prefers-color-scheme: dark) {
-            .stApp {
-                background-color: #0e1117;
-                color: #fafafa;
-            }
-            .stChatMessage {
-                background-color: #262730;
-            }
-            section[data-testid="stSidebar"] {
-                background-color: #262730;
-            }
-        }
-        
-        /* Theme switcher buttons */
-        .theme-btn-light {
-            background-color: #f0f2f6 !important;
-            color: #262730 !important;
-        }
-        .theme-btn-dark {
-            background-color: #262730 !important;
-            color: #fafafa !important;
-        }
-        .theme-btn-auto {
-            background-color: #1f77b4 !important;
-            color: #fafafa !important;
-            border: 2px solid #4CAF50 !important;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-    else:  # light theme
-        st.markdown("""
-        <style>
-        /* Light theme (default) */
-        .theme-btn-light {
-            background-color: #f0f2f6 !important;
-            color: #262730 !important;
-            border: 2px solid #4CAF50 !important;
-        }
-        .theme-btn-dark {
-            background-color: #262730 !important;
-            color: #fafafa !important;
-        }
-        .theme-btn-auto {
-            background-color: #1f77b4 !important;
-            color: #fafafa !important;
-        }
-        </style>
-        """, unsafe_allow_html=True)
+# Initialize session state for policy names
+if "policy_display_names" not in st.session_state:
+    st.session_state.policy_display_names = {}
 
 # Custom CSS to hide Streamlit elements for non-admin users
 def apply_custom_css():
-    # First apply theme CSS
-    current_theme = get_current_theme()
-    apply_theme_css(current_theme)
-    
-    # Then apply role-specific CSS
     if not is_admin():
         st.markdown("""
         <style>
@@ -197,6 +83,19 @@ def init_pinecone():
                 st.error(f"Pinecone initialization error: {str(e)}")
             return None
     return None
+
+# Functions to manage policy display names
+def save_policy_names():
+    """Save policy display names to Streamlit secrets or local storage"""
+    # In production, you'd want to save this to a database or persistent storage
+    # For now, we'll keep it in session state
+    pass
+
+def get_display_name(namespace):
+    """Get the display name for a namespace, or return formatted namespace if not set"""
+    if namespace in st.session_state.policy_display_names:
+        return st.session_state.policy_display_names[namespace]
+    return namespace.replace('_', ' ').title()
 
 # Test function for debugging (admin only)
 def test_search_function(query):
@@ -273,7 +172,7 @@ def get_relevant_context(query, k=6):
                             all_results.append({
                                 'score': match['score'],
                                 'text': text_content,
-                                'source': match['metadata'].get('source_file', namespace.replace('_', ' ')),
+                                'source': get_display_name(namespace),
                                 'page': match['metadata'].get('page', 'Unknown')
                             })
                         
@@ -395,7 +294,7 @@ if is_admin():
                     st.subheader("Documents")
                     for ns, ns_stats in stats['namespaces'].items():
                         if ns:
-                            display_name = ns.replace('_', ' ')
+                            display_name = get_display_name(ns)
                             st.text(f"📄 {display_name}")
                             st.caption(f"   {ns_stats['vector_count']} chunks")
                 
@@ -423,7 +322,7 @@ if is_admin():
         st.header("Document Management")
         
         # Upload Section
-        tab1, tab2 = st.tabs(["📤 Upload Documents", "🗑️ Manage Documents"])
+        tab1, tab2, tab3 = st.tabs(["📤 Upload Documents", "🗑️ Manage Documents", "✏️ Edit Policy Names"])
         
         with tab1:
             st.subheader("Upload Policy Documents")
@@ -448,8 +347,7 @@ if is_admin():
                         status_text = st.empty()
                         
                         try:
-                            # [Previous processing code remains the same]
-                            # Step 1-9 processing logic here...
+                            # Step 1: Save uploaded file
                             status_text.text("📁 Saving uploaded file...")
                             progress_bar.progress(15)
                             
@@ -457,10 +355,78 @@ if is_admin():
                                 tmp_file.write(uploaded_file.read())
                                 tmp_file_path = tmp_file.name
                             
-                            # Continue with existing processing logic...
-                            # [Rest of the processing code remains unchanged]
+                            # Step 2: Load PDF
+                            status_text.text("📄 Loading PDF document...")
+                            progress_bar.progress(25)
+                            loader = PyPDFLoader(tmp_file_path)
+                            documents = loader.load()
+                            
+                            # Step 3: Validate content
+                            status_text.text("🔍 Validating PDF content...")
+                            progress_bar.progress(35)
+                            is_valid, validation_msg = validate_pdf_text(documents)
+                            
+                            if not is_valid:
+                                st.error(f"❌ PDF Validation Failed: {validation_msg}")
+                                return
+                            
+                            st.info(f"✅ {validation_msg}")
+                            
+                            # Step 4: Split documents
+                            status_text.text("✂️ Splitting into chunks...")
+                            progress_bar.progress(45)
+                            text_splitter = RecursiveCharacterTextSplitter(
+                                chunk_size=1000,
+                                chunk_overlap=200,
+                                length_function=len,
+                                separators=["\n\n", "\n", " ", ""]
+                            )
+                            texts = text_splitter.split_documents(documents)
+                            
+                            # Step 5: Prepare metadata
+                            status_text.text("📋 Preparing metadata...")
+                            progress_bar.progress(55)
+                            for idx, text in enumerate(texts):
+                                text.metadata['chunk_index'] = idx
+                                text.metadata['source_file'] = uploaded_file.name
+                                text.metadata['upload_date'] = datetime.now().isoformat()
+                                text.metadata['text'] = text.page_content
+                            
+                            # Step 6: Generate namespace
+                            namespace = uploaded_file.name.replace('.pdf', '').replace(' ', '_').lower()
+                            
+                            # Step 7: Create embeddings
+                            status_text.text("🧮 Creating embeddings...")
+                            progress_bar.progress(65)
+                            embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+                            
+                            # Step 8: Upload to Pinecone
+                            status_text.text("☁️ Uploading to database...")
+                            progress_bar.progress(75)
+                            
+                            vector_store = PineconeVectorStore.from_documents(
+                                documents=texts,
+                                embedding=embeddings,
+                                index_name="finance-policy",
+                                namespace=namespace
+                            )
+                            
+                            # Step 9: Verify upload
+                            status_text.text("✅ Verifying upload...")
+                            progress_bar.progress(90)
+                            
+                            index = pc.Index("finance-policy")
+                            stats_after = index.describe_index_stats()
+                            new_count = stats_after['namespaces'].get(namespace, {}).get('vector_count', 0)
+                            
+                            progress_bar.progress(100)
+                            status_text.text("✅ Processing complete!")
+                            
+                            # Clean up
+                            os.unlink(tmp_file_path)
                             
                             st.success(f"✅ Successfully processed {uploaded_file.name}")
+                            st.info(f"📊 Added {new_count} chunks to the database")
                             st.balloons()
                             time.sleep(2)
                             st.rerun()
@@ -479,7 +445,7 @@ if is_admin():
                 doc_to_delete = st.selectbox(
                     "Select document",
                     [ns for ns in stats['namespaces'].keys() if ns],
-                    format_func=lambda x: x.replace('_', ' ')
+                    format_func=lambda x: get_display_name(x)
                 )
                 
                 col1, col2 = st.columns(2)
@@ -490,6 +456,9 @@ if is_admin():
                         try:
                             with st.spinner("Deleting..."):
                                 index.delete(namespace=doc_to_delete, delete_all=True)
+                                # Also remove from display names if exists
+                                if doc_to_delete in st.session_state.policy_display_names:
+                                    del st.session_state.policy_display_names[doc_to_delete]
                                 st.success("✅ Deleted successfully")
                                 time.sleep(2)
                                 st.cache_resource.clear()
@@ -505,6 +474,7 @@ if is_admin():
                     try:
                         with st.spinner("Clearing all..."):
                             index.delete(delete_all=True)
+                            st.session_state.policy_display_names = {}
                             st.success("✅ All documents cleared!")
                             time.sleep(2)
                             st.cache_resource.clear()
@@ -513,6 +483,46 @@ if is_admin():
                         st.error(f"Error: {str(e)}")
             else:
                 st.info("No documents uploaded yet")
+        
+        with tab3:
+            st.subheader("Edit Policy Display Names")
+            st.info("Customize how policy names appear to users")
+            
+            if stats and stats.get('namespaces'):
+                # Create a form for editing names
+                with st.form("edit_policy_names"):
+                    st.markdown("**Current Policies:**")
+                    
+                    for ns in sorted(stats['namespaces'].keys()):
+                        if ns:
+                            col1, col2 = st.columns([1, 2])
+                            with col1:
+                                st.text(f"Namespace: {ns}")
+                            with col2:
+                                current_name = get_display_name(ns)
+                                new_name = st.text_input(
+                                    f"Display name for {ns}",
+                                    value=current_name,
+                                    key=f"name_{ns}"
+                                )
+                                # Store the new name in session state
+                                if new_name and new_name != ns.replace('_', ' ').title():
+                                    st.session_state.policy_display_names[ns] = new_name
+                    
+                    if st.form_submit_button("Save Names", type="primary"):
+                        save_policy_names()
+                        st.success("✅ Policy names updated!")
+                        time.sleep(1)
+                        st.rerun()
+                
+                # Show preview
+                st.markdown("---")
+                st.markdown("**Preview (as users will see):**")
+                for ns in sorted(stats['namespaces'].keys()):
+                    if ns:
+                        st.markdown(f"• {get_display_name(ns)}")
+            else:
+                st.info("No policies uploaded yet")
         
         # Chat Preview Section
         st.markdown("---")
@@ -549,7 +559,7 @@ else:
     st.title("💼 Finance Policy Assistant")
     st.markdown("Ask me anything about company finance policies in English or Bahasa Malaysia!")
     
-    # Sidebar for users
+    # Sidebar for users (removed theme section)
     with st.sidebar:
         st.header("ℹ️ About")
         st.markdown("""
@@ -560,35 +570,6 @@ else:
         - Get instant answers from policy documents
         - Available 24/7
         """)
-        
-        # Theme Switcher Section
-        st.markdown("---")
-        st.subheader("🎨 Theme")
-        
-        current_theme = get_current_theme()
-        
-        # Create three columns for theme buttons
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if st.button("☀️ Light", use_container_width=True, 
-                        type="primary" if current_theme == "light" else "secondary"):
-                set_theme("light")
-                st.rerun()
-        
-        with col2:
-            if st.button("🌙 Dark", use_container_width=True,
-                        type="primary" if current_theme == "dark" else "secondary"):
-                set_theme("dark")
-                st.rerun()
-        
-        with col3:
-            if st.button("🔄 Auto", use_container_width=True,
-                        type="primary" if current_theme == "auto" else "secondary"):
-                set_theme("auto")
-                st.rerun()
-        
-        st.caption("Auto follows your system preference")
         
         st.markdown("---")
         
@@ -602,12 +583,12 @@ else:
                 if stats['total_vector_count'] > 0:
                     st.success("✅ System ready")
                     
-                    # Show available documents
+                    # Show available documents with custom names
                     if stats.get('namespaces'):
                         st.markdown("**📚 Available policies:**")
-                        for ns in stats['namespaces'].keys():
+                        for ns in sorted(stats['namespaces'].keys()):
                             if ns:
-                                display_name = ns.replace('_', ' ').title()
+                                display_name = get_display_name(ns)
                                 st.markdown(f"• {display_name}")
                 else:
                     st.warning("⚠️ No policies available")
