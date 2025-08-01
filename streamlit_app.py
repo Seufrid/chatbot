@@ -309,7 +309,7 @@ def get_relevant_context(query, k=8):
 # FIXED FUNCTION: Generate response without page citations
 def generate_response(query, context):
     try:
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         chat_history = "\n".join([
             f"{msg['role'].upper()}: {msg['content']}" 
