@@ -44,8 +44,8 @@ Before running this application, you'll need:
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/finance-policy-assistant.git
-   cd finance-policy-assistant
+   git clone https://github.com/Seufrid/finance-policy-chatbot.git
+   cd finance-policy-chatbot
    ```
 
 2. **Create a virtual environment** (recommended)
@@ -131,7 +131,7 @@ Before running this application, you'll need:
 ## 🏗️ Project Structure
 
 ```
-finance-policy-assistant/
+finance-policy-chatbot/
 ├── streamlit_app.py          # Main application file
 ├── requirements.txt          # Python dependencies
 ├── README.md                # This file
