@@ -787,7 +787,7 @@ else:
     st.title("💼 Finance Policy Assistant")
     st.markdown("Ask me anything about company finance policies in English or Bahasa Malaysia!")
     
-    # Sidebar for users (removed theme section)
+    # Sidebar for users
     with st.sidebar:
         st.header("ℹ️ About")
         st.markdown("""
@@ -798,6 +798,33 @@ else:
         - Get instant answers from policy documents
         - Available 24/7
         """)
+        
+        st.markdown("---")
+        
+        # NEW CONVERSATION MANAGEMENT SECTION
+        st.header("💬 Conversation")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🗑️ Clear Chat", use_container_width=True):
+                st.session_state.messages = []
+                st.success("Chat cleared!")
+                st.rerun()
+        
+        with col2:
+            # Show message count
+            msg_count = len(st.session_state.messages)
+            st.metric("Messages", msg_count)
+        
+        # Optional: Add conversation export
+        if st.session_state.messages:
+            st.download_button(
+                label="📥 Download Chat",
+                data=json.dumps(st.session_state.messages, indent=2),
+                file_name=f"chat_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json",
+                use_container_width=True
+            )
         
         st.markdown("---")
         
